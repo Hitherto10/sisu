@@ -189,7 +189,7 @@ export default function LibraryView({ books, onSelectBook, onUpload, onDrop }) {
             animate={{ opacity: 1 }}
             className="flex flex-col items-center justify-center py-20 text-center"
           >
-            <BookMarked className="w-16 h-16 text-muted-foreground/30 mb-4" />
+            <BookMarked className="w-16 h-16 text-gray-500 mb-4" />
             <h2 className="text-lg font-serif font-bold text-muted-foreground">
               {books.length === 0 ? 'Your library is empty' : 'No books match your search'}
             </h2>
