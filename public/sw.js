@@ -1,5 +1,5 @@
-// BookWorm Service Worker
-const CACHE_NAME = 'bookworm-v1';
+// Sisu Service Worker
+const CACHE_NAME = 'sisu-v1';
 const urlsToCache = [
     '/',
     '../index.html',

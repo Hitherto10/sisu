@@ -1,6 +1,6 @@
 import { openDB } from 'idb';
 
-const DB_NAME = 'bookworm-db';
+const DB_NAME = 'sisu-db';
 const DB_VERSION = 1;
 
 let dbPromise = null;

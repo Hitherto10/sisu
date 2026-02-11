@@ -1,6 +1,6 @@
 {
-  "name": "BookWorm - Beautiful Book Reader",
-  "short_name": "BookWorm",
+  "name": "Sisu - Beautiful Book Reader",
+  "short_name": "Sisu",
   "description": "A stunning, installable PWA book reader for PDF, EPUB, and TXT files",
   "start_url": "/",
   "display": "standalone",

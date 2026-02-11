@@ -24,18 +24,18 @@ const BookCard = ({ book, onClick }) => (
     onClick={onClick}
     className="cursor-pointer group"
   >
-    <div className="relative aspect-[2/3] rounded-xl overflow-hidden shadow-lg group-hover:shadow-xl transition-shadow bg-secondary">
+    <div className="relative aspect-2/3 rounded-xl overflow-hidden shadow-lg group-hover:shadow-xl transition-shadow bg-secondary">
       {book.coverUrl ? (
         <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover" />
       ) : (
-        <div className="w-full h-full flex flex-col items-center justify-center p-4 bg-gradient-to-br from-primary/20 to-primary/5">
+        <div className="w-full h-full flex flex-col items-center justify-center p-4 bg-slate-900">
           <BookOpen className="w-10 h-10 text-primary/60 mb-2" />
           <span className="text-xs font-sans-body text-muted-foreground text-center line-clamp-2">{book.title}</span>
         </div>
       )}
-      {/* Progress overlay */}
+       {/*Progress overlay*/}
       {book.status === 'reading' && book.progress > 0 && (
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-3">
+        <div className="absolute bottom-0 left-0 right-0 bg-linear-to-t from-black/70 to-transparent p-3">
           <div className="w-full h-1.5 rounded-full bg-white/30 overflow-hidden">
             <div
               className="h-full rounded-full transition-all"
@@ -45,11 +45,9 @@ const BookCard = ({ book, onClick }) => (
           <span className="text-[10px] text-white/80 mt-1 block">{book.progress}%</span>
         </div>
       )}
-      {/* Format badge */}
-      <Badge className="absolute top-2 right-2 text-[10px] uppercase bg-background/80 text-foreground border-none backdrop-blur-sm">
-        {book.format}
-      </Badge>
     </div>
+
+
     <div className="mt-2 px-1">
       <h3 className="font-serif text-sm font-bold leading-tight line-clamp-1">{book.title}</h3>
       <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{book.author || 'Unknown Author'}</p>
@@ -206,13 +204,13 @@ export default function LibraryView({ books, onSelectBook, onUpload, onDrop }) {
             )}
           </motion.div>
         ) : (
-          <motion.div layout className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
+          <div  className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
             <AnimatePresence>
               {filtered.map((book) => (
                 <BookCard key={book.id} book={book} onClick={() => onSelectBook(book)} />
               ))}
             </AnimatePresence>
-          </motion.div>
+          </div>
         )}
       </main>
     </div>

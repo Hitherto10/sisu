@@ -119,12 +119,12 @@ export default function Installprompt() {
 
                                 {/* Title */}
                                 <h2 className="text-xl font-serif font-bold text-center mb-2">
-                                    Install BookWorm
+                                    Install Sisu
                                 </h2>
 
                                 {/* Description */}
                                 <p className="text-sm text-muted-foreground text-center mb-6 leading-relaxed">
-                                    Add BookWorm to your home screen for a seamless reading experience - faster access, offline reading, and no browser distractions.
+                                    Add Sisu to your home screen for a seamless reading experience - faster access, offline reading, and no browser distractions.
                                 </p>
 
                                 {/* Benefits */}
