@@ -1,0 +1,158 @@
+@import url('https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Outfit";
+  src: url("./fonts/Outfit/static/Outfit-Regular.ttf");
+  font-weight: normal;
+  font-style: normal;
+}
+
+*{
+  font-family: "Outfit", serif;
+}
+
+:root {
+  --background: 36 33% 97%;
+  --foreground: 24 10% 15%;
+
+  --card: 36 30% 95%;
+  --card-foreground: 24 10% 15%;
+
+  --popover: 36 33% 97%;
+  --popover-foreground: 24 10% 15%;
+
+  --primary: 24 70% 45%;
+  --primary-foreground: 36 33% 97%;
+
+  --secondary: 36 25% 90%;
+  --secondary-foreground: 24 10% 25%;
+
+  --muted: 36 20% 92%;
+  --muted-foreground: 24 8% 50%;
+
+  --accent: 150 30% 40%;
+  --accent-foreground: 36 33% 97%;
+
+  --destructive: 0 65% 55%;
+  --destructive-foreground: 36 33% 97%;
+
+  --border: 30 20% 88%;
+  --input: 30 20% 85%;
+  --ring: 24 70% 45%;
+
+  --radius: 0.75rem;
+
+  --sidebar-background: 36 30% 95%;
+  --sidebar-foreground: 24 10% 25%;
+  --sidebar-primary: 24 70% 45%;
+  --sidebar-primary-foreground: 36 33% 97%;
+  --sidebar-accent: 36 25% 90%;
+  --sidebar-accent-foreground: 24 10% 25%;
+  --sidebar-border: 30 20% 88%;
+  --sidebar-ring: 24 70% 45%;
+
+  --warm-gold: 40 75% 55%;
+  --warm-amber: 30 80% 50%;
+  --reading-sepia: 36 40% 92%;
+  --reading-dark-bg: 220 20% 12%;
+  --reading-dark-fg: 36 20% 85%;
+  --star: 45 90% 55%;
+}
+
+.dark {
+  --background: 220 20% 10%;
+  --foreground: 36 20% 90%;
+
+  --card: 220 18% 14%;
+  --card-foreground: 36 20% 90%;
+
+  --popover: 220 18% 14%;
+  --popover-foreground: 36 20% 90%;
+
+  --primary: 24 70% 55%;
+  --primary-foreground: 220 20% 10%;
+
+  --secondary: 220 15% 20%;
+  --secondary-foreground: 36 20% 85%;
+
+  --muted: 220 15% 18%;
+  --muted-foreground: 36 10% 55%;
+
+  --accent: 150 30% 45%;
+  --accent-foreground: 220 20% 10%;
+
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 36 20% 90%;
+
+  --border: 220 15% 22%;
+  --input: 220 15% 22%;
+  --ring: 24 70% 55%;
+
+  --sidebar-background: 220 18% 12%;
+  --sidebar-foreground: 36 20% 85%;
+  --sidebar-primary: 24 70% 55%;
+  --sidebar-primary-foreground: 220 20% 10%;
+  --sidebar-accent: 220 15% 18%;
+  --sidebar-accent-foreground: 36 20% 85%;
+  --sidebar-border: 220 15% 22%;
+  --sidebar-ring: 24 70% 55%;
+
+  --warm-gold: 40 75% 55%;
+  --warm-amber: 30 80% 50%;
+  --reading-sepia: 36 40% 92%;
+  --reading-dark-bg: 220 20% 12%;
+  --reading-dark-fg: 36 20% 85%;
+  --star: 45 90% 55%;
+}
+
+
+/* Hide scrollbar for mobile bottom nav spacing */
+.pb-safe {
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+}
+
+
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}
