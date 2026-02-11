@@ -48,27 +48,54 @@ export default function Reader() {
     });
   }, []);
 
+  const handleEpubProgress = useCallback((progress, cfi) => {
+    setBook((prevBook) => {
+      if (!prevBook) return prevBook;
 
+      const updated = {
+        ...prevBook,
+        progress,
+        currentCfi: cfi,
+        lastReadAt: Date.now(),
+      };
 
-  const handleEpubProgress = useCallback(
-    (progress) => {
-      if (!book) return;
-      const updated = { ...book, progress, lastReadAt: Date.now() };
-      if (progress >= 95) updated.status = 'finished';
-      setBook(updated);
+      // Mark as finished if progress >= 95%
+      if (progress >= 95 && prevBook.status !== 'finished') {
+        updated.status = 'finished';
+      }
+
       saveBook(updated);
-    },
-    [book],
-  );
+      return updated;
+    });
+  }, []);
+
+  const handleTxtProgress = useCallback((progress) => {
+    setBook((prevBook) => {
+      if (!prevBook || prevBook.progress === progress) return prevBook;
+
+      const updated = {
+        ...prevBook,
+        progress,
+        lastReadAt: Date.now(),
+      };
+
+      if (progress >= 95 && prevBook.status !== 'finished') {
+        updated.status = 'finished';
+      }
+
+      saveBook(updated);
+      return updated;
+    });
+  }, []);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-background">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground">Loading book...</p>
+        <div className="flex items-center justify-center h-screen bg-background">
+          <div className="text-center">
+            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <p className="text-sm text-muted-foreground">Loading book...</p>
+          </div>
         </div>
-      </div>
     );
   }
 
@@ -80,7 +107,7 @@ export default function Reader() {
     case 'epub':
       return <EpubReader book={book} fileData={fileData} onBack={handleBack} onProgressUpdate={handleEpubProgress} />;
     case 'txt':
-      return <TxtReader book={book} fileData={fileData} onBack={handleBack} onProgressUpdate={handleEpubProgress} />;
+      return <TxtReader book={book} fileData={fileData} onBack={handleBack} onProgressUpdate={handleTxtProgress} />;
     default:
       return null;
   }
