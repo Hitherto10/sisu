@@ -1,9 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getBook, getBookFile, saveBook } from '../lib/db';
-import PdfReader from '../components/PdfReader';
-import EpubReader from '../components/EpubReader';
-import TxtReader from '../components/TxtReader';
+import { getBook, getBookFile, saveBook, updateReadingStats, getReadingGoal, saveReadingGoal } from '../lib/db';
+import UnifiedBookReader from "../components/UnifiedBookReader.jsx";
 
 export default function Reader() {
   const { id } = useParams();
@@ -11,6 +9,15 @@ export default function Reader() {
   const [book, setBook] = useState(null);
   const [fileData, setFileData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [scrollDirection, setScrollDirection] = useState('paginated');
+
+  useEffect(() => {
+    // Load scroll direction preference
+    const saved = localStorage.getItem('reading-scroll-direction');
+    if (saved) {
+      setScrollDirection(saved);
+    }
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -39,16 +46,19 @@ export default function Reader() {
         ...prevBook,
         currentPage: page,
         totalPages: total,
+        currentPageNumber: page,
+        totalPageNumber: total,
         progress: Math.round((page / total) * 100),
         lastReadAt: Date.now(),
       };
 
       saveBook(updated);
+      updateReadingStats(1);
       return updated;
     });
   }, []);
 
-  const handleEpubProgress = useCallback((progress, cfi) => {
+  const handleEbookProgress = useCallback((progress, cfi, page, total) => {
     setBook((prevBook) => {
       if (!prevBook) return prevBook;
 
@@ -56,15 +66,24 @@ export default function Reader() {
         ...prevBook,
         progress,
         currentCfi: cfi,
+        currentPageNumber: page,
+        totalPageNumber: total,
         lastReadAt: Date.now(),
       };
 
       // Mark as finished if progress >= 95%
       if (progress >= 95 && prevBook.status !== 'finished') {
         updated.status = 'finished';
+        getReadingGoal().then(goal => {
+            saveReadingGoal({
+                ...goal,
+                totalBooksCompleted: (goal.totalBooksCompleted || 0) + 1
+            });
+        });
       }
 
       saveBook(updated);
+      updateReadingStats(1);
       return updated;
     });
   }, []);
@@ -81,10 +100,40 @@ export default function Reader() {
 
       if (progress >= 95 && prevBook.status !== 'finished') {
         updated.status = 'finished';
+        getReadingGoal().then(goal => {
+            saveReadingGoal({
+                ...goal,
+                totalBooksCompleted: (goal.totalBooksCompleted || 0) + 1
+            });
+        });
       }
 
       saveBook(updated);
+      updateReadingStats(1);
       return updated;
+    });
+  }, []);
+
+  // New: handle metadata extracted from PDF viewer (title/author)
+  const handleMetaExtracted = useCallback((meta) => {
+    if (!meta) return;
+    setBook((prevBook) => {
+      if (!prevBook) return prevBook;
+      let changed = false;
+      const updated = { ...prevBook };
+      if (meta.title && (!updated.title || updated.title === '' || updated.title === prevBook.filename)) {
+        updated.title = meta.title;
+        changed = true;
+      }
+      if (meta.author && (!updated.author || updated.author === '')) {
+        updated.author = meta.author;
+        changed = true;
+      }
+      if (changed) {
+        saveBook(updated);
+        return updated;
+      }
+      return prevBook;
     });
   }, []);
 
@@ -99,16 +148,14 @@ export default function Reader() {
     );
   }
 
-  if (!book || !fileData) return null;
-
-  switch (book.format) {
-    case 'pdf':
-      return <PdfReader book={book} fileData={fileData} onBack={handleBack} onProgressUpdate={handlePdfProgress} />;
-    case 'epub':
-      return <EpubReader book={book} fileData={fileData} onBack={handleBack} onProgressUpdate={handleEpubProgress} />;
-    case 'txt':
-      return <TxtReader book={book} fileData={fileData} onBack={handleBack} onProgressUpdate={handleTxtProgress} />;
-    default:
-      return null;
-  }
+  return (
+      <UnifiedBookReader
+          book={book}
+          fileData={fileData}
+          onBack={handleBack}
+          onProgressUpdate={book.format === 'pdf' ? handlePdfProgress : (book.format === 'txt' ? handleTxtProgress : handleEbookProgress)}
+          scrollDirection={scrollDirection}
+          onMetaExtracted={handleMetaExtracted}
+      />
+  );
 }

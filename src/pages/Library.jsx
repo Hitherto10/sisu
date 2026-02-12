@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import LibraryView from '../components/LibraryView';
+import AutoHidingHeader from '../components/AutoHidingHeader';
+import { BookOpen } from 'lucide-react';
 import { getAllBooks, saveBook, saveBookFile, deleteBook, saveCover, getCover } from '../lib/db';
-import { detectFormat, generateId } from '../lib/book-utils';
-import { getCoverArt } from '../lib/cover-utils';
 import { toast } from '../hooks/use-toast';
+import { useFileReader } from '../hooks/useFileReader';
 
 export default function Library() {
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const fileInputRef = useRef(null);
   const navigate = useNavigate();
+  const { readFile } = useFileReader();
 
   useEffect(() => {
     loadBooks();
@@ -40,50 +42,25 @@ export default function Library() {
   const processFiles = useCallback(
       async (files) => {
         for (const file of Array.from(files)) {
-          const format = detectFormat(file);
-          if (!format) {
-            toast({
-              title: 'Unsupported format',
-              description: `${file.name} is not a supported format (PDF, EPUB, TXT)`,
-              variant: 'destructive',
-            });
-            continue;
-          }
-
-          const id = generateId();
-          const data = await file.arrayBuffer();
-          const title = file.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ');
-
-          // Show loading toast
+          // Show initial loading toast
           const loadingToast = toast({
             title: 'Processing book...',
-            description: `Extracting cover for "${title}"`,
+            description: `Analyzing "${file.name}"`,
           });
 
           try {
-            // Clone the buffer for cover extraction (prevents detachment)
-            const coverData = data.slice(0);
-
-            // Extract or generate cover
-            const coverUrl = await getCoverArt({
-              format,
-              fileData: coverData,
-              title,
-              coverUrl: null, // No online URL for local uploads
-            });
+            const result = await readFile(file);
+            const { id, data, ...bookData } = result;
 
             const book = {
+              ...bookData,
               id,
-              title,
-              author: '',
-              format,
-              coverUrl,
-              fileSize: file.size,
-              addedAt: Date.now(),
               status: 'want-to-read',
               progress: 0,
-              currentPage: format === 'pdf' ? 1 : undefined,
-              currentCfi: format === 'epub' ? null : undefined,
+              currentPage: bookData.format === 'pdf' ? 1 : undefined,
+              currentCfi: bookData.format === 'epub' ? null : undefined,
+              currentPageNumber: 0,
+              totalPageNumber: 0,
               tags: [],
               notes: [],
             };
@@ -93,29 +70,34 @@ export default function Library() {
             await saveBook(book);
 
             // Save cover separately for faster loading
-            if (coverUrl && coverUrl.startsWith('data:')) {
-              await saveCover({ id, dataUrl: coverUrl });
+            if (book.coverUrl && book.coverUrl.startsWith('data:')) {
+              await saveCover({ id, dataUrl: book.coverUrl });
             }
 
-            setBooks((prev) => [book, ...prev]);
+            setBooks((prev) => {
+              // Avoid duplicates if same file uploaded again
+              const exists = prev.some(b => b.id === id);
+              if (exists) return prev;
+              return [book, ...prev];
+            });
 
             loadingToast.dismiss?.();
             toast({
               title: 'Book added!',
-              description: `"${title}" is ready to read`
+              description: `"${book.title}" is ready to read`
             });
           } catch (error) {
             console.error('Error processing book:', error);
             loadingToast.dismiss?.();
             toast({
               title: 'Error processing book',
-              description: error.message,
+              description: error.message || 'Failed to parse file',
               variant: 'destructive',
             });
           }
         }
       },
-      [],
+      [readFile],
   );
 
   const handleUpload = () => fileInputRef.current?.click();
@@ -158,25 +140,36 @@ export default function Library() {
   }
 
   return (
-      <>
-        <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.epub,.txt,.text"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              if (e.target.files) processFiles(e.target.files);
-              e.target.value = '';
-            }}
-        />
-        <LibraryView
-            books={books}
-            onSelectBook={handleSelectBook}
-            onUpload={handleUpload}
-            onDrop={processFiles}
-            onDeleteBook={handleDeleteBook}
-        />
-      </>
+      <div className="pb-24 min-h-screen bg-background text-foreground">
+        <AutoHidingHeader className="bg-background/80 backdrop-blur-md border-b border-border px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 bg-primary/10 rounded-lg">
+              <BookOpen className="w-5 h-5 text-primary" />
+            </div>
+            <h1 className="font-outfit font-bold text-xl tracking-tight text-foreground">Sisu</h1>
+          </div>
+        </AutoHidingHeader>
+
+        <div className="pt-16">
+          <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.epub,.mobi,.azw,.azw3,.txt,.text,.cbz,.cbr"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) processFiles(e.target.files);
+                e.target.value = '';
+              }}
+          />
+          <LibraryView
+              books={books}
+              onSelectBook={handleSelectBook}
+              onUpload={handleUpload}
+              onDrop={processFiles}
+              onDeleteBook={handleDeleteBook}
+          />
+        </div>
+      </div>
   );
 }

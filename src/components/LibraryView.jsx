@@ -16,6 +16,8 @@ const BookCard = ({ book, onClick, onDelete }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [longPressTimer, setLongPressTimer] = useState(null);
 
+  const isComingSoon = ['mobi', 'cbr'].includes(book.format?.toLowerCase());
+
   const handleTouchStart = () => {
     const timer = setTimeout(() => {
       setShowMenu(true);
@@ -41,30 +43,39 @@ const BookCard = ({ book, onClick, onDelete }) => {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.9 }}
-          whileHover={{ y: -4 }}
-          whileTap={{ scale: 0.97 }}
-          className="cursor-pointer group relative"
+          whileHover={!isComingSoon ? { y: -4 } : {}}
+          whileTap={!isComingSoon ? { scale: 0.97 } : {}}
+          className={`group relative ${isComingSoon ? 'cursor-default' : 'cursor-pointer'}`}
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
           onContextMenu={handleContextMenu}
       >
         <div
-            className="relative aspect-[2/3] rounded-xl overflow-hidden shadow-lg group-hover:shadow-xl transition-shadow bg-secondary"
+            className={`relative aspect-[2/3] rounded-2xl overflow-hidden shadow-sm group-hover:shadow-md transition-all duration-300 bg-secondary ${isComingSoon ? 'opacity-70 grayscale-[0.5]' : ''}`}
             onClick={(e) => {
-              if (!showMenu) onClick();
+              if (!showMenu && !isComingSoon) onClick();
             }}
         >
           {book.coverUrl ? (
               <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover" />
           ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center p-4 bg-gradient-to-br from-primary/20 to-primary/5">
-                <BookOpen className="w-10 h-10 text-primary/60 mb-2" />
-                <span className="text-xs font-sans-body text-muted-foreground text-center line-clamp-2">{book.title}</span>
+              <div className="w-full h-full flex flex-col items-center justify-center p-4 bg-gradient-to-br from-primary/10 to-transparent">
+                <BookOpen className="w-10 h-10 text-primary/40 mb-3" />
+                <span className="text-xs font-medium text-muted-foreground text-center line-clamp-3 px-2">{book.title}</span>
               </div>
           )}
 
+          {/* Coming Soon Badge Overlay */}
+          {isComingSoon && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
+               <div className="bg-primary px-3 py-1 rounded-full shadow-lg">
+                 <span className="text-[10px] font-bold text-primary-foreground uppercase tracking-wider">Coming Soon</span>
+               </div>
+            </div>
+          )}
+
           {/* Progress overlay */}
-          {book.status === 'reading' && book.progress > 0 && (
+          {!isComingSoon && book.status === 'reading' && book.progress > 0 && (
               <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-3">
                 <div className="w-full h-1.5 rounded-full bg-white/30 overflow-hidden">
                   <div

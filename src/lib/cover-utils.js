@@ -14,13 +14,13 @@ export async function generatePlaceholderCover(title) {
     canvas.height = 600;
     const ctx = canvas.getContext('2d');
 
-    // Random warm gradient colors
+    // Mellow, cosy color palette
     const colors = [
-        ['#e8505b', '#d43f49'], // Red
-        ['#f4a261', '#e76f51'], // Orange
-        ['#2a9d8f', '#264653'], // Teal
-        ['#e9c46a', '#f4a261'], // Gold
-        ['#8b4513', '#654321'], // Brown
+        ['#c36322', '#e76f51'], // Burnt Orange
+        ['#8b5cf6', '#a78bfa'], // Lavender
+        ['#0ea5e9', '#38bdf8'], // Sky
+        ['#10b981', '#34d399'], // Emerald
+        ['#2a2522', '#4a4542'], // Dark Cocoa
     ];
     const [color1, color2] = colors[Math.floor(Math.random() * colors.length)];
 
@@ -31,16 +31,27 @@ export async function generatePlaceholderCover(title) {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, 400, 600);
 
-    // Book icon
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-    ctx.fillRect(120, 200, 160, 200);
-    ctx.fillRect(140, 180, 120, 20);
+    // Subtle texture/pattern
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+    for(let i = 0; i < 20; i++) {
+        ctx.beginPath();
+        ctx.arc(Math.random() * 400, Math.random() * 600, Math.random() * 100, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Book spine line
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+    ctx.fillRect(0, 0, 30, 600);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.fillRect(30, 0, 2, 600);
 
     // Title
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 32px "Libre Baskerville", serif';
+    ctx.font = 'bold 36px "Outfit", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+    ctx.shadowBlur = 10;
 
     // Word wrap
     const words = title.split(' ');
@@ -50,7 +61,7 @@ export async function generatePlaceholderCover(title) {
     for (let i = 1; i < words.length; i++) {
         const testLine = currentLine + ' ' + words[i];
         const metrics = ctx.measureText(testLine);
-        if (metrics.width > 340) {
+        if (metrics.width > 300) {
             lines.push(currentLine);
             currentLine = words[i];
         } else {
@@ -60,12 +71,12 @@ export async function generatePlaceholderCover(title) {
     lines.push(currentLine);
 
     // Draw lines
-    const startY = 300 - (lines.length * 20);
+    const startY = 300 - (lines.length * 25);
     lines.forEach((line, i) => {
-        ctx.fillText(line, 200, startY + (i * 40));
+        ctx.fillText(line, 215, startY + (i * 50));
     });
 
-    return canvas.toDataURL('image/png');
+    return canvas.toDataURL('image/jpeg', 0.9);
 }
 
 /**

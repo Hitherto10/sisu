@@ -5,14 +5,52 @@
  */
 export function detectFormat(file) {
   const ext = file.name.split('.').pop()?.toLowerCase();
-  if (ext === 'pdf') return 'pdf';
+
+  // Supported by epub.js
   if (ext === 'epub') return 'epub';
+  if (ext === 'mobi') return 'epub'; // epub.js can handle MOBI
+  if (ext === 'azw' || ext === 'azw3') return 'epub'; // Kindle formats
+
+  // PDFs (handled separately)
+  if (ext === 'pdf') return 'pdf';
+
+  // Text files
   if (ext === 'txt' || ext === 'text') return 'txt';
+
+  // Comic book formats (CBZ/CBR are ZIP/RAR with images)
+  if (ext === 'cbz' || ext === 'cbr') return 'comic';
+
   return null;
 }
 
 /**
- * Generate unique ID
+ * Get human-readable format name
+ * @param {string} format
+ * @returns {string}
+ */
+export function getFormatLabel(format) {
+  const labels = {
+    'epub': 'EPUB',
+    'pdf': 'PDF',
+    'txt': 'TXT',
+    'comic': 'Comic',
+  };
+  return labels[format] || format.toUpperCase();
+}
+
+/**
+ * Generate unique ID from file buffer (SHA-256)
+ * @param {ArrayBuffer} buffer
+ * @returns {Promise<string>}
+ */
+export async function generateFileHash(buffer) {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Generate unique ID (fallback)
  * @returns {string}
  */
 export function generateId() {

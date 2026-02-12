@@ -107,16 +107,67 @@ export async function getSessionsByBook(bookId) {
 export async function getReadingGoal() {
   const db = await getDB();
   const goal = await db.get('settings', 'reading-goal');
-  return goal?.value ?? {
+  
+  const defaultGoal = {
     dailyPages: 20,
     weeklyBooks: 1,
     currentStreak: 0,
     longestStreak: 0,
     lastReadDate: '',
+    totalBooksCompleted: 0,
+    totalMinutesRead: 0,
   };
+
+  return goal?.value ?? defaultGoal;
 }
 
 export async function saveReadingGoal(goal) {
   const db = await getDB();
   await db.put('settings', { key: 'reading-goal', value: goal });
+}
+
+// Stats tracking
+export async function updateReadingStats(pagesRead = 1) {
+    const goal = await getReadingGoal();
+    const today = new Date().toISOString().split('T')[0];
+    
+    let { currentStreak, longestStreak, lastReadDate } = goal;
+    
+    if (lastReadDate === today) {
+        // Already read today, no streak change
+    } else {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split('T')[0];
+        
+        if (lastReadDate === yesterdayStr) {
+            currentStreak += 1;
+        } else {
+            currentStreak = 1;
+        }
+        
+        if (currentStreak > longestStreak) {
+            longestStreak = currentStreak;
+        }
+        
+        lastReadDate = today;
+    }
+    
+    await saveReadingGoal({
+        ...goal,
+        currentStreak,
+        longestStreak,
+        lastReadDate,
+        totalMinutesRead: (goal.totalMinutesRead || 0) + 1, // Rough estimate per page
+    });
+}
+
+export async function clearAllData() {
+    const db = await getDB();
+    await db.clear('books');
+    await db.clear('files');
+    await db.clear('covers');
+    await db.clear('sessions');
+    await db.clear('settings');
+    localStorage.clear();
 }

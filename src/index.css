@@ -60,6 +60,11 @@
   --color-reading-dark-bg: hsl(var(--reading-dark-bg));
   --color-reading-dark-fg: hsl(var(--reading-dark-fg));
 
+  --color-cream: #faf8f5;
+  --color-burnt-orange: #c36322;
+  --color-soft-beige: #ece7df;
+  --color-dark-cocoa: #2a2522;
+
   /* Chart colors */
   --color-chart-1: hsl(var(--chart-1));
   --color-chart-2: hsl(var(--chart-2));
@@ -78,34 +83,34 @@
    ============================================ */
 :root {
   --background: 36 33% 97%;
-  --foreground: 24 10% 15%;
+  --foreground: 19 10% 15%;
 
-  --card: 36 30% 95%;
-  --card-foreground: 24 10% 15%;
+  --card: 37 25% 93%;
+  --card-foreground: 19 10% 15%;
 
   --popover: 36 33% 97%;
-  --popover-foreground: 24 10% 15%;
+  --popover-foreground: 19 10% 15%;
 
   --primary: 24 70% 45%;
   --primary-foreground: 36 33% 97%;
 
-  --secondary: 36 25% 90%;
-  --secondary-foreground: 24 10% 25%;
+  --secondary: 37 25% 90%;
+  --secondary-foreground: 19 10% 25%;
 
-  --muted: 36 20% 92%;
-  --muted-foreground: 24 8% 50%;
+  --muted: 37 20% 92%;
+  --muted-foreground: 19 8% 50%;
 
-  --accent: 150 30% 40%;
+  --accent: 24 70% 45%;
   --accent-foreground: 36 33% 97%;
 
   --destructive: 0 65% 55%;
   --destructive-foreground: 36 33% 97%;
 
-  --border: 30 20% 88%;
-  --input: 30 20% 85%;
+  --border: 37 20% 88%;
+  --input: 37 20% 85%;
   --ring: 24 70% 45%;
 
-  --radius: 0.75rem;
+  --radius: 1rem;
 
   --sidebar-background: 36 30% 95%;
   --sidebar-foreground: 24 10% 25%;
