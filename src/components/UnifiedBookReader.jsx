@@ -2,8 +2,22 @@ import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import ePub from 'epubjs';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowLeft, ChevronLeft, ChevronRight, Type, Maximize, Minimize } from 'lucide-react';
+
+// Debounce helper
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
 import { Document, Page, pdfjs } from 'react-pdf';
 import { Button } from './ui/button';
+import { LoadingSpinner } from './ui/loading-spinner';
 import { Slider } from './ui/slider';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -154,6 +168,24 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
         return () => window.removeEventListener('resize', updateDimensions);
     }, [scrollDirection]);
 
+    // Restore PDF scroll position
+    useEffect(() => {
+        if (book.format === 'pdf' && scrollDirection === 'scrolled' && numPdfPages > 0) {
+            const container = document.getElementById('pdf-scroll-container');
+            if (container) {
+                // If we have an exact page, scroll to it
+                // We estimate the position based on page number
+                if (book.currentPage > 1) {
+                    const scrollRatio = (book.currentPage - 1) / numPdfPages;
+                    // Small timeout to ensure content is rendered
+                    setTimeout(() => {
+                        container.scrollTop = container.scrollHeight * scrollRatio;
+                    }, 100);
+                }
+            }
+        }
+    }, [book.format, scrollDirection, numPdfPages, book.currentPage]);
+
     // Fullscreen toggle
     const toggleFullscreen = () => {
         if (!document.fullscreenElement) {
@@ -261,7 +293,7 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                 console.error('Failed to generate locations:', err);
             });
 
-            rendition.on('relocated', (location) => {
+            const handleRelocated = (location) => {
                 if (location?.start) {
                     const cfi = location.start.cfi;
                     if (epub.locations?.length > 0) {
@@ -272,7 +304,36 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                         onProgressUpdate(progress, cfi, page, total);
                     }
                 }
-            });
+            };
+
+            rendition.on('relocated', handleRelocated);
+
+            // Capture scroll events in scrolled mode to ensure we track progress accurately
+            // 'scroll' events do not bubble, so we must use capture: true on the container
+            // to catch scroll events from the inner view
+            let scrollCleanup = null;
+            if (scrollDirection === 'scrolled') {
+                const container = viewerRef.current;
+
+                const handleScroll = debounce(() => {
+                    // Manually check location on scroll
+                    try {
+                        const location = rendition.currentLocation();
+                        if (location && location.start) {
+                            handleRelocated(location);
+                        }
+                    } catch (e) {
+                        // Ignore errors during scroll checking
+                    }
+                }, 150);
+
+                if (container) {
+                    container.addEventListener('scroll', handleScroll, { capture: true });
+                    scrollCleanup = () => {
+                        container.removeEventListener('scroll', handleScroll, { capture: true });
+                    };
+                }
+            }
 
             // Add error handler
             rendition.on('error', (err) => {
@@ -295,6 +356,7 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
 
             return () => {
                 document.removeEventListener('keydown', handleKeyDown);
+                if (scrollCleanup) scrollCleanup();
             };
         });
 
@@ -452,13 +514,35 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                             overflow: 'visible',
                             position: 'relative'
                         }}
-                    />
+                    >
+                        {!isEpubReady && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-10">
+                                <LoadingSpinner text="Loading book..." />
+                            </div>
+                        )}
+                    </div>
                 )}
 
                 {book.format === 'pdf' && memoPdfFile && (
                     scrollDirection === 'scrolled' ? (
                         // Scrolled mode - render all pages
-                        <div className="w-full h-full overflow-y-auto overflow-x-hidden pb-20">
+                        <div
+                            id="pdf-scroll-container"
+                            className="w-full h-full overflow-y-auto overflow-x-hidden pb-20"
+                            onScroll={(e) => {
+                                const el = e.target;
+                                if (el) {
+                                    const scrollPercent = (el.scrollTop / (el.scrollHeight - el.clientHeight)) * 100 || 0;
+                                    const estimatedPage = Math.max(1, Math.ceil((scrollPercent / 100) * numPdfPages));
+
+                                    if (estimatedPage !== currentPdfPage) {
+                                        setCurrentPdfPage(estimatedPage);
+                                        // Pass true as third arg to indicate this is a scroll update, preventing infinite loops if needed
+                                        onProgressUpdate(estimatedPage, numPdfPages);
+                                    }
+                                }
+                            }}
+                        >
                             <Document
                                 file={memoPdfFile}
                                 onLoadSuccess={(pdf) => {
@@ -476,18 +560,11 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                                         // ignore
                                     }
                                 }}
-                                loading={<div className="text-center py-8">Loading PDF...</div>}
-                                onScroll={(e) => {
-                                    const el = e.target;
-                                    if (el) {
-                                        const scrollPercent = Math.round((el.scrollTop / (el.scrollHeight - el.clientHeight)) * 100) || 0;
-                                        const estimatedPage = Math.ceil((scrollPercent / 100) * numPdfPages);
-                                        if (estimatedPage !== currentPdfPage) {
-                                            setCurrentPdfPage(estimatedPage);
-                                            onProgressUpdate(estimatedPage, numPdfPages);
-                                        }
-                                    }
-                                }}
+                                loading={
+                                    <div className="flex items-center justify-center h-full py-20">
+                                        <LoadingSpinner text="Loading PDF..." />
+                                    </div>
+                                }
                             >
                                 <div className="flex flex-col items-center gap-4 py-6 px-6 max-w-4xl mx-auto">
                                     {Array.from(new Array(numPdfPages), (el, index) => (
@@ -523,7 +600,11 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                                         // ignore
                                     }
                                 }}
-                                loading={<div className="text-center">Loading PDF...</div>}
+                                loading={
+                                    <div className="flex items-center justify-center h-full">
+                                        <LoadingSpinner text="Loading PDF..." />
+                                    </div>
+                                }
                             >
                                 <div className="flex items-center justify-center p-6">
                                     <Page

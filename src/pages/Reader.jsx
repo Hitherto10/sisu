@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getBook, getBookFile, saveBook, updateReadingStats, getReadingGoal, saveReadingGoal } from '../lib/db';
 import UnifiedBookReader from "../components/UnifiedBookReader.jsx";
+import { LoadingSpinner } from "../components/ui/loading-spinner";
 
 export default function Reader() {
   const { id } = useParams();
@@ -75,10 +76,10 @@ export default function Reader() {
       if (progress >= 95 && prevBook.status !== 'finished') {
         updated.status = 'finished';
         getReadingGoal().then(goal => {
-            saveReadingGoal({
-                ...goal,
-                totalBooksCompleted: (goal.totalBooksCompleted || 0) + 1
-            });
+          saveReadingGoal({
+            ...goal,
+            totalBooksCompleted: (goal.totalBooksCompleted || 0) + 1
+          });
         });
       }
 
@@ -101,10 +102,10 @@ export default function Reader() {
       if (progress >= 95 && prevBook.status !== 'finished') {
         updated.status = 'finished';
         getReadingGoal().then(goal => {
-            saveReadingGoal({
-                ...goal,
-                totalBooksCompleted: (goal.totalBooksCompleted || 0) + 1
-            });
+          saveReadingGoal({
+            ...goal,
+            totalBooksCompleted: (goal.totalBooksCompleted || 0) + 1
+          });
         });
       }
 
@@ -139,23 +140,20 @@ export default function Reader() {
 
   if (loading) {
     return (
-        <div className="flex items-center justify-center h-screen bg-background">
-          <div className="text-center">
-            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-            <p className="text-sm text-muted-foreground">Loading book...</p>
-          </div>
-        </div>
+      <div className="flex items-center justify-center h-screen bg-background">
+        <LoadingSpinner text="Loading book..." />
+      </div>
     );
   }
 
   return (
-      <UnifiedBookReader
-          book={book}
-          fileData={fileData}
-          onBack={handleBack}
-          onProgressUpdate={book.format === 'pdf' ? handlePdfProgress : (book.format === 'txt' ? handleTxtProgress : handleEbookProgress)}
-          scrollDirection={scrollDirection}
-          onMetaExtracted={handleMetaExtracted}
-      />
+    <UnifiedBookReader
+      book={book}
+      fileData={fileData}
+      onBack={handleBack}
+      onProgressUpdate={book.format === 'pdf' ? handlePdfProgress : (book.format === 'txt' ? handleTxtProgress : handleEbookProgress)}
+      scrollDirection={scrollDirection}
+      onMetaExtracted={handleMetaExtracted}
+    />
   );
 }
