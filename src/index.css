@@ -3,6 +3,31 @@
 @import "tailwindcss";
 
 /* ============================================
+   VIEWPORT & LAYOUT FIXES
+   ============================================ */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: fixed;
+  overscroll-behavior: none;
+}
+
+/* Prevent zoom on mobile */
+@viewport {
+  width: device-width;
+  zoom: 1;
+  user-zoom: fixed;
+}
+
+/* Prevent accidental zooming */
+input, select, textarea {
+  font-size: 16px !important;
+}
+
+/* ============================================
    CUSTOM FONTS
    ============================================ */
 @font-face {
@@ -193,14 +218,45 @@
 * {
   font-family: "Outfit", serif;
   @apply border-border;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
   @apply bg-background text-foreground;
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
 }
 
 h1, h2, h3, h4, h5, h6 {
   font-family: 'Libre Baskerville', serif;
+}
+
+/* ============================================
+   READING TYPOGRAPHY IMPROVEMENTS
+   ============================================ */
+.reading-content {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.7;
+  word-spacing: 0.05em;
+  letter-spacing: 0.01em;
+}
+
+.reading-content p {
+  margin-bottom: 1em;
+  text-align: justify;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  -moz-hyphens: auto;
+}
+
+.reading-content h1,
+.reading-content h2,
+.reading-content h3 {
+  font-family: 'Libre Baskerville', serif;
+  margin-top: 1.5em;
+  margin-bottom: 0.75em;
+  line-height: 1.3;
 }
 
 /* ============================================
@@ -234,15 +290,87 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* ============================================
-   LEGACY STYLES (Optional - can be removed)
+   EPUB.JS IFRAME FIXES
    ============================================ */
-#root {
-  /*max-width: 1280px;*/
-  margin: 0 auto;
-  padding: 5px;
-  text-align: center;
+/* Ensure epub content is properly contained */
+.epub-container iframe {
+  border: none !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  overflow: visible !important;
 }
 
+/* Fix for epub.js rendering issues */
+[class^="epub-"] {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Ensure EPUB content can scroll properly in scrolled mode */
+.epub-view {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fix for paginated mode */
+.epub-container[data-flow="paginated"] {
+  overflow: hidden !important;
+}
+
+/* Fix for scrolled/continuous mode */
+.epub-container[data-flow="scrolled"],
+.epub-container[data-flow="scrolled-doc"] {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  height: 100% !important;
+}
+
+/* Ensure epub.js manager doesn't clip content */
+#viewer .epub-view,
+#viewer iframe {
+  min-height: 100% !important;
+}
+
+/* ============================================
+   PDF VIEWER IMPROVEMENTS
+   ============================================ */
+.react-pdf__Page {
+  max-width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.react-pdf__Page__canvas {
+  max-width: 100% !important;
+  height: auto !important;
+  margin: 0 auto;
+}
+
+.react-pdf__Page__textContent {
+  max-width: 100%;
+  user-select: text;
+}
+
+/* ============================================
+   TOUCH IMPROVEMENTS
+   ============================================ */
+button, a, [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Prevent pull-to-refresh on reader pages */
+.reader-container {
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ============================================
+   LEGACY STYLES (can be cleaned up later)
+   ============================================ */
 .logo {
   height: 6em;
   padding: 1.5em;

@@ -16,8 +16,7 @@ const themes = {
     dark: { bg: '#1a1d24', fg: '#d5cfc5', label: 'Dark', secondary: '#2a2f3a' },
 };
 
-// --- Metadata helpers ---
-// Decode RFC2047 encoded strings like =?utf-8?B?...?=
+// Metadata helpers
 function decodeRFC2047(str) {
     if (!str || typeof str !== 'string') return str;
     const m = str.match(/=\?([^?]+)\?([BQ])\?([^?]+)\?=/i);
@@ -25,12 +24,10 @@ function decodeRFC2047(str) {
     const [, charset, encoding, encoded] = m;
     try {
         if (encoding.toUpperCase() === 'B') {
-            // base64 decode
             const binary = atob(encoded.replace(/\s/g, ''));
             const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
             return new TextDecoder(charset || 'utf-8').decode(bytes);
         } else {
-            // Q encoding
             return encoded.replace(/_/g, ' ').replace(/=([A-Fa-f0-9]{2})/g, (_, p) => String.fromCharCode(parseInt(p, 16)));
         }
     } catch (e) {
@@ -42,12 +39,9 @@ function cleanMetaString(s, fallback = '') {
     if (!s) return fallback;
     let out = String(s).replace(/\u0000/g, '').trim();
     out = out.replace(/[\r\n]+/g, ' ');
-    // Replace underscores with spaces and collapse multiple spaces
     out = out.replace(/[_]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-    // Try RFC2047 decode
     out = decodeRFC2047(out);
 
-    // If looks like a file path, extract basename
     if (/[\\/].+\.[a-zA-Z0-9]{1,6}$/.test(out)) {
         const parts = out.split(/[\\/]/);
         let name = parts[parts.length - 1];
@@ -55,7 +49,6 @@ function cleanMetaString(s, fallback = '') {
         out = name;
     }
 
-    // Remove trailing generator/vendor tags if present
     const dashParts = out.split(' - ');
     if (dashParts.length > 1) {
         const tail = dashParts.slice(1).join(' - ');
@@ -64,44 +57,36 @@ function cleanMetaString(s, fallback = '') {
         }
     }
 
-    // Fallback if still gibberish
     const stripped = out.replace(/[^A-Za-z0-9\s,.'-]/g, '');
     if (stripped.length < 2 || /^untitled$/i.test(out)) return fallback || out;
 
     return out;
 }
 
-// Normalize author strings: handle "Last, First" -> "First Last", multiple authors separated by ; or and
 function normalizeAuthor(raw) {
     if (!raw) return raw;
     let s = String(raw).trim();
     if (!s) return '';
 
-    // Split multiple authors by common separators
     const parts = s.split(/;|\band\b|\n/).map(p => p.trim()).filter(Boolean);
     const normalizedParts = parts.map((part) => {
-        // If in form "Last, First" swap
         const commaParts = part.split(',').map(p => p.trim()).filter(Boolean);
         if (commaParts.length === 2 && /^[A-Za-z\- ]+$/.test(commaParts[0]) && /^[A-Za-z\- ]+$/.test(commaParts[1])) {
             return `${commaParts[1]} ${commaParts[0]}`.trim();
         }
-        // If looks like "First Last" already, return as-is
         return part;
     });
 
-    // Join with comma for display if multiple
     return normalizedParts.join(', ');
 }
 
 function extractPdfMetaObject(meta) {
-    // meta can contain .info and .metadata (XMP). Try multiple fields.
     const info = meta?.info || {};
     const metadata = meta?.metadata || null;
 
     let title = info?.Title || info?.title || metadata?.get ? (metadata.get('dc:title') || metadata.get('title')) : undefined;
     let author = info?.Author || info?.author || info?.Creator || metadata?.get ? (metadata.get('dc:creator') || metadata.get('creator')) : undefined;
 
-    // metadata.get may return arrays or objects, normalize
     if (Array.isArray(title)) title = title[0];
     if (Array.isArray(author)) author = Array.isArray(author[0]) ? author[0].join(', ') : author[0];
 
@@ -130,7 +115,7 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
     // PDF specific state
     const [numPdfPages, setNumPdfPages] = useState(0);
     const [currentPdfPage, setCurrentPdfPage] = useState(book.currentPageNumber || 1);
-    const [pdfWidth, setPdfWidth] = useState(400);
+    const [pdfDimensions, setPdfDimensions] = useState({ width: 0, height: 0 });
 
     // TXT specific state
     const textContent = useMemo(() => {
@@ -142,7 +127,34 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
     const [txtProgress, setTxtProgress] = useState(book.progress || 0);
     const txtScrollRef = useRef(null);
 
-    // Shared Fullscreen toggle
+    // Calculate optimal dimensions based on viewport
+    useEffect(() => {
+        const updateDimensions = () => {
+            if (!containerRef.current) return;
+
+            const containerWidth = containerRef.current.clientWidth;
+            const containerHeight = containerRef.current.clientHeight;
+
+            // Reserve space for controls (top: 60px, bottom: 80px in paginated mode)
+            const availableHeight = containerHeight - (scrollDirection === 'paginated' ? 140 : 60);
+            const availableWidth = containerWidth;
+
+            // Calculate optimal width maintaining readable line length
+            // Optimal line length: 60-80 characters ≈ 600-700px at base font size
+            const maxReadableWidth = Math.min(700, availableWidth - 48); // 24px padding on each side
+
+            setPdfDimensions({
+                width: maxReadableWidth,
+                height: availableHeight
+            });
+        };
+
+        updateDimensions();
+        window.addEventListener('resize', updateDimensions);
+        return () => window.removeEventListener('resize', updateDimensions);
+    }, [scrollDirection]);
+
+    // Fullscreen toggle
     const toggleFullscreen = () => {
         if (!document.fullscreenElement) {
             containerRef.current?.requestFullscreen();
@@ -154,6 +166,7 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
     };
 
     // --- EPUB Logic ---
+    // --- EPUB Logic ---
     useEffect(() => {
         if (book.format !== 'epub' || !viewerRef.current || !fileData) return;
 
@@ -161,21 +174,33 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
         epubRef.current = epub;
 
         epub.ready.then(() => {
+            const containerWidth = viewerRef.current.clientWidth;
+            const containerHeight = viewerRef.current.clientHeight;
+
+            // Calculate optimal reading width (capped at 700px for readability)
+            const readableWidth = Math.min(700, containerWidth - 48);
+
+            // Use full available height for better content flow
+            const availableHeight = containerHeight;
+
             const rendition = epub.renderTo(viewerRef.current, {
-                width: '100%',
-                height: '100%',
+                width: readableWidth,
+                height: availableHeight,
                 spread: 'none',
                 flow: scrollDirection === 'scrolled' ? 'scrolled-doc' : 'paginated',
+                snap: false,
+                allowScriptedContent: true,
+                ignoreClass: 'annotator-hl',
+                manager: scrollDirection === 'scrolled' ? 'continuous' : 'default',
             });
             renditionRef.current = rendition;
 
-            // Try to extract metadata from EPUB package
+            // Try to extract metadata
             try {
                 const pkg = epub.package || epub.packaging || epub.loaded?.package || epub.loaded?.metadata || epub.metadata || null;
                 let title = pkg?.metadata?.title || pkg?.metadata?.['dc:title'] || epub?.metadata?.title || epub?.metadata?.['dc:title'];
                 let author = pkg?.metadata?.creator || pkg?.metadata?.author || pkg?.metadata?.['dc:creator'] || epub?.metadata?.creator || epub?.metadata?.author;
 
-                // If author is array/object, normalize
                 if (Array.isArray(author)) author = author.join(', ');
                 title = cleanMetaString(title, book.title || '');
                 author = cleanMetaString(author, book.author || '');
@@ -188,25 +213,52 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                 // ignore metadata extraction errors
             }
 
-            // Apply initial theme/font
+            // Apply theme with better typography
             const t = themes[theme];
             rendition.themes.default({
-                body: {
-                    background: t.bg,
-                    color: t.fg,
-                    'font-family': "'DM Sans', sans-serif",
-                    'line-height': '1.6',
-                    'padding': '40px 20px !important'
+                '*': {
+                    'box-sizing': 'border-box !important',
                 },
-                'p, span, div': { 'font-size': `${fontSize}% !important` },
+                'body': {
+                    background: `${t.bg} !important`,
+                    color: `${t.fg} !important`,
+                    'font-family': "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+                    'line-height': '1.7',
+                    'padding': '40px 24px !important',
+                    'max-width': '100%',
+                    'margin': '0 auto',
+                    'overflow': 'visible !important',
+                },
+                'p': {
+                    'font-size': `${fontSize}% !important`,
+                    'margin-bottom': '1em',
+                    'text-align': 'justify',
+                    'hyphens': 'auto'
+                },
+                'h1, h2, h3, h4, h5, h6': {
+                    'font-family': "'Libre Baskerville', serif",
+                    'margin-top': '1.5em',
+                    'margin-bottom': '0.75em',
+                    'line-height': '1.3'
+                },
+                'img': {
+                    'max-width': '100%',
+                    'height': 'auto',
+                    'display': 'block',
+                    'margin': '1em auto'
+                }
             });
 
             rendition.display(book.currentCfi || undefined).then(() => {
                 setIsEpubReady(true);
             });
 
-            epub.locations.generate(1024).then((locations) => {
+            // Generate locations for the entire book
+            epub.locations.generate(1600).then((locations) => {
+                console.log(`✅ Generated ${locations.length} locations for EPUB`);
                 setEpubProgress(prev => ({ ...prev, total: locations.length }));
+            }).catch(err => {
+                console.error('Failed to generate locations:', err);
             });
 
             rendition.on('relocated', (location) => {
@@ -221,9 +273,36 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                     }
                 }
             });
+
+            // Add error handler
+            rendition.on('error', (err) => {
+                console.error('EPUB rendering error:', err);
+            });
+
+            // Handle keyboard navigation
+            const handleKeyDown = (e) => {
+                if (book.format !== 'epub' || !renditionRef.current) return;
+                if (e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    renditionRef.current.prev();
+                } else if (e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    renditionRef.current.next();
+                }
+            };
+
+            document.addEventListener('keydown', handleKeyDown);
+
+            return () => {
+                document.removeEventListener('keydown', handleKeyDown);
+            };
         });
 
-        return () => epub.destroy();
+        return () => {
+            if (epubRef.current) {
+                epubRef.current.destroy();
+            }
+        };
     }, [fileData, book.format, scrollDirection]);
 
     useEffect(() => {
@@ -231,32 +310,18 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
             const t = themes[theme];
             renditionRef.current.themes.default({
                 body: { background: t.bg, color: t.fg },
-                'p, span, div': { 'font-size': `${fontSize}% !important` },
+                'p': { 'font-size': `${fontSize}% !important` },
             });
         }
     }, [theme, fontSize, isEpubReady, book.format]);
 
     // --- PDF Logic ---
-    useEffect(() => {
-        if (book.format !== 'pdf' || !containerRef.current) return;
-        const obs = new ResizeObserver((entries) => {
-            if (entries[0]) {
-                setPdfWidth(entries[0].contentRect.width);
-            }
-        });
-        obs.observe(containerRef.current);
-        return () => obs.disconnect();
-    }, [book.format]);
-
-    // Make a copy of the bytes and memoize the result to avoid detached ArrayBuffer errors
     const pdfData = useMemo(() => {
         if (book.format !== 'pdf' || !fileData) return null;
         const src = fileData instanceof Uint8Array ? fileData : new Uint8Array(fileData);
-        // .slice() creates a copy with its own ArrayBuffer which pdf.js can safely send to a worker
         return src.slice();
     }, [fileData, book.format]);
 
-    // Memoize the object passed to the Document component to avoid unnecessary reload warnings
     const memoPdfFile = useMemo(() => (pdfData ? { data: pdfData } : null), [pdfData]);
 
     const handlePdfPageChange = (page) => {
@@ -283,19 +348,27 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
     };
 
     const handlePagePrev = () => {
-        if (book.format === 'epub') renditionRef.current?.prev();
+        if (book.format === 'epub' && renditionRef.current) {
+            renditionRef.current.prev().catch(err => {
+                console.warn('Cannot go to previous page:', err);
+            });
+        }
         if (book.format === 'pdf') handlePdfPageChange(currentPdfPage - 1);
     };
 
     const handlePageNext = () => {
-        if (book.format === 'epub') renditionRef.current?.next();
+        if (book.format === 'epub' && renditionRef.current) {
+            renditionRef.current.next().catch(err => {
+                console.warn('Cannot go to next page:', err);
+            });
+        }
         if (book.format === 'pdf') handlePdfPageChange(currentPdfPage + 1);
     };
 
     return (
-        <div 
-            ref={containerRef} 
-            className="flex flex-col h-screen overflow-hidden" 
+        <div
+            ref={containerRef}
+            className="flex flex-col h-screen w-screen overflow-hidden fixed inset-0"
             style={{ background: themes[theme].bg, color: themes[theme].fg }}
         >
             {/* Top bar */}
@@ -312,7 +385,6 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                     <h2 className="text-sm font-serif font-bold line-clamp-1" style={{ color: themes[theme].fg }}>
                         {book.title}
                     </h2>
-                    {/* Show author if available (cleaned via metadata extraction) */}
                     {book.author && (
                         <p className="text-xs" style={{ color: `${themes[theme].fg}88` }}>
                             {book.author}
@@ -339,7 +411,7 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                         initial={{ opacity: 0, y: -10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -10 }}
-                        className="absolute top-16 left-4 right-4 z-40 p-4 rounded-xl shadow-lg border"
+                        className="absolute top-16 left-4 right-4 z-40 p-4 rounded-xl shadow-lg border max-w-md mx-auto"
                         style={{ background: themes[theme].bg, borderColor: `${themes[theme].fg}15` }}
                     >
                         <div className="mb-4">
@@ -366,23 +438,31 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
             </AnimatePresence>
 
             {/* Content Area */}
-            <div 
-                className="flex-1 relative flex flex-col overflow-hidden" 
+            <div
+                className="flex-1 relative flex flex-col items-center justify-center overflow-hidden pt-16 pb-20"
                 onClick={() => { setShowControls(!showControls); setShowSettings(false); }}
             >
                 {book.format === 'epub' && (
-                    <div ref={viewerRef} className="h-full w-full pt-16" />
+                    <div
+                        ref={viewerRef}
+                        className="w-full h-full"
+                        style={{
+                            maxWidth: '700px',
+                            margin: '0 auto',
+                            overflow: 'visible',
+                            position: 'relative'
+                        }}
+                    />
                 )}
 
-                {book.format === 'pdf' && (
-                    <div className="h-full w-full overflow-auto flex justify-center pt-16 pb-24">
-                        {memoPdfFile && (
+                {book.format === 'pdf' && memoPdfFile && (
+                    scrollDirection === 'scrolled' ? (
+                        // Scrolled mode - render all pages
+                        <div className="w-full h-full overflow-y-auto overflow-x-hidden pb-20">
                             <Document
                                 file={memoPdfFile}
                                 onLoadSuccess={(pdf) => {
-                                    // set number of pages
                                     setNumPdfPages(pdf.numPages || 0);
-                                    // Extract metadata (title/author) and inform parent
                                     try {
                                         pdf.getMetadata?.().then((meta) => {
                                             const extracted = extractPdfMetaObject(meta || {});
@@ -391,34 +471,90 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                                             if (onMetaExtracted && (title || author)) {
                                                 onMetaExtracted({ title, author });
                                             }
-                                        }).catch(()=>{});
+                                        }).catch(() => { });
                                     } catch (e) {
-                                        // ignore metadata errors
+                                        // ignore
                                     }
                                 }}
-                                loading={<div className="mt-20">Loading PDF...</div>}
+                                loading={<div className="text-center py-8">Loading PDF...</div>}
+                                onScroll={(e) => {
+                                    const el = e.target;
+                                    if (el) {
+                                        const scrollPercent = Math.round((el.scrollTop / (el.scrollHeight - el.clientHeight)) * 100) || 0;
+                                        const estimatedPage = Math.ceil((scrollPercent / 100) * numPdfPages);
+                                        if (estimatedPage !== currentPdfPage) {
+                                            setCurrentPdfPage(estimatedPage);
+                                            onProgressUpdate(estimatedPage, numPdfPages);
+                                        }
+                                    }
+                                }}
                             >
-                                <Page 
-                                    pageNumber={currentPdfPage} 
-                                    width={Math.min(pdfWidth - 32, 800)}
-                                    renderAnnotationLayer={false}
-                                    renderTextLayer={true}
-                                />
+                                <div className="flex flex-col items-center gap-4 py-6 px-6 max-w-4xl mx-auto">
+                                    {Array.from(new Array(numPdfPages), (el, index) => (
+                                        <div key={`page_${index + 1}`} className="shadow-lg">
+                                            <Page
+                                                pageNumber={index + 1}
+                                                width={pdfDimensions.width || 600}
+                                                renderAnnotationLayer={true}
+                                                renderTextLayer={true}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
                             </Document>
-                        )}
-                    </div>
+                        </div>
+                    ) : (
+                        // Paginated mode - render single page
+                        <div className="w-full h-full flex items-center justify-center">
+                            <Document
+                                file={memoPdfFile}
+                                onLoadSuccess={(pdf) => {
+                                    setNumPdfPages(pdf.numPages || 0);
+                                    try {
+                                        pdf.getMetadata?.().then((meta) => {
+                                            const extracted = extractPdfMetaObject(meta || {});
+                                            const title = extracted.title || book.title;
+                                            const author = extracted.author || book.author;
+                                            if (onMetaExtracted && (title || author)) {
+                                                onMetaExtracted({ title, author });
+                                            }
+                                        }).catch(() => { });
+                                    } catch (e) {
+                                        // ignore
+                                    }
+                                }}
+                                loading={<div className="text-center">Loading PDF...</div>}
+                            >
+                                <div className="flex items-center justify-center p-6">
+                                    <Page
+                                        pageNumber={currentPdfPage}
+                                        width={pdfDimensions.width || 600}
+                                        renderAnnotationLayer={true}
+                                        renderTextLayer={true}
+                                        className="shadow-lg"
+                                    />
+                                </div>
+                            </Document>
+                        </div>
+                    )
                 )}
 
                 {book.format === 'txt' && (
-                    <div 
+                    <div
                         ref={txtScrollRef}
-                        className="flex-1 overflow-auto pt-20 pb-20 px-6 sm:px-10"
+                        className="flex-1 overflow-auto w-full"
                         onScroll={handleTxtScroll}
+                        style={{ maxWidth: '700px', margin: '0 auto' }}
                     >
-                        <div className="max-w-2xl mx-auto">
-                            <pre 
-                                className="whitespace-pre-wrap font-sans-body leading-relaxed"
-                                style={{ fontSize: `${(fontSize / 100) * 16}px` }}
+                        <div className="px-6 py-8">
+                            <pre
+                                className="whitespace-pre-wrap font-sans leading-relaxed"
+                                style={{
+                                    fontSize: `${(fontSize / 100) * 16}px`,
+                                    lineHeight: '1.7',
+                                    textAlign: 'justify',
+                                    fontFamily: "'DM Sans', sans-serif"
+                                }}
                             >
                                 {textContent}
                             </pre>
@@ -426,15 +562,15 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                     </div>
                 )}
 
-                {/* Invisible Swipe Zones for PDF/TXT in paginated mode */}
+                {/* Swipe Zones for navigation */}
                 {scrollDirection === 'paginated' && (book.format === 'pdf' || book.format === 'epub') && (
                     <>
-                        <div 
-                            className="absolute left-0 top-0 bottom-0 w-20 z-10" 
+                        <div
+                            className="absolute left-0 top-16 bottom-20 w-20 z-10 cursor-pointer"
                             onClick={(e) => { e.stopPropagation(); handlePagePrev(); }}
                         />
-                        <div 
-                            className="absolute right-0 top-0 bottom-0 w-20 z-10" 
+                        <div
+                            className="absolute right-0 top-16 bottom-20 w-20 z-10 cursor-pointer"
                             onClick={(e) => { e.stopPropagation(); handlePageNext(); }}
                         />
                     </>
@@ -450,15 +586,21 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                     style={{ background: `${themes[theme].bg}ee`, borderColor: `${themes[theme].fg}15` }}
                 >
                     <div className="flex items-center gap-4 max-w-lg mx-auto">
-                        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); handlePagePrev(); }} disabled={book.format === 'pdf' && currentPdfPage <= 1}>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => { e.stopPropagation(); handlePagePrev(); }}
+                            disabled={book.format === 'pdf' && currentPdfPage <= 1}
+                            style={{ color: themes[theme].fg }}
+                        >
                             <ChevronLeft className="w-5 h-5" />
                         </Button>
                         <div className="flex-1">
-                            <Slider 
-                                value={[book.format === 'pdf' ? currentPdfPage : epubProgress.page]} 
-                                min={1} 
-                                max={book.format === 'pdf' ? numPdfPages : epubProgress.total || 1} 
-                                step={1} 
+                            <Slider
+                                value={[book.format === 'pdf' ? currentPdfPage : epubProgress.page]}
+                                min={1}
+                                max={book.format === 'pdf' ? numPdfPages : epubProgress.total || 1}
+                                step={1}
                                 onValueChange={([v]) => {
                                     if (book.format === 'pdf') {
                                         handlePdfPageChange(v);
@@ -469,7 +611,13 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                                 onClick={(e) => e.stopPropagation()}
                             />
                         </div>
-                        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); handlePageNext(); }} disabled={book.format === 'pdf' && currentPdfPage >= numPdfPages}>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => { e.stopPropagation(); handlePageNext(); }}
+                            disabled={book.format === 'pdf' && currentPdfPage >= numPdfPages}
+                            style={{ color: themes[theme].fg }}
+                        >
                             <ChevronRight className="w-5 h-5" />
                         </Button>
                     </div>
