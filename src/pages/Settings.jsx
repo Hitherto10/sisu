@@ -46,7 +46,7 @@ export default function SettingsPage() {
     };
 
     return (
-        <div className="flex flex-col min-h-screen pb-safe px-6">
+        <div className="flex flex-col h-screen overflow-y-auto px-6 bg-brand-bg">
             {/* Header */}
             <header className="pt-8 pb-6 text-left">
                 <div className="flex items-center gap-3 mb-1">
@@ -59,7 +59,7 @@ export default function SettingsPage() {
             </header>
 
             {/* Settings Sections */}
-            <main className="flex-1 space-y-6 text-left">
+            <main className="flex-1 space-y-6 pb-32 text-left">
                 {/* Theme & Appearance */}
                 <section className="bg-card rounded-2xl p-6 border shadow-sm">
                     <h2 className="text-lg font-serif font-bold mb-4 flex items-center gap-2">
@@ -184,6 +184,7 @@ export default function SettingsPage() {
                         </p>
                     </div>
                 </section>
+
             </main>
         </div>
     );
