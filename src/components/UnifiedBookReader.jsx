@@ -12,7 +12,13 @@ import 'react-pdf/dist/Page/TextLayer.css';
 import { debounce } from '../lib/utils';
 import { cleanMetaString, normalizeAuthor, extractPdfMetaObject } from '../lib/meta-utils';
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+
+// JPX (JPEG 2000) decoding assets
+pdfjs.GlobalWorkerOptions.wasmUrl = '/pdfjs-dist/wasm/';
+pdfjs.GlobalWorkerOptions.standardFontDataUrl = '/pdfjs-dist/standard_fonts/';
+pdfjs.GlobalWorkerOptions.cMapUrl = '/pdfjs-dist/cmaps/';
+pdfjs.GlobalWorkerOptions.cMapPacked = true;
 
 // --- Constants ---
 const HEADER_HEIGHT = 60;
