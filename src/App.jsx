@@ -12,6 +12,7 @@ import Discover from "./pages/Discover";
 import ProgressPage from "./pages/Progress";
 import SettingsPage from "./pages/Settings";
 import NotFound from "./pages/NotFound";
+import { ThemeProvider } from "next-themes";
 
 const queryClient = new QueryClient();
 
@@ -44,17 +45,19 @@ const AnimatedRoutes = () => {
 };
 
 const App = () => (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <Installprompt />
-        <BrowserRouter>
-          <AnimatedRoutes />
-          <BottomNav />
-        </BrowserRouter>
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+                <Toaster />
+                <Sonner />
+                <Installprompt />
+                <BrowserRouter>
+                    <AnimatedRoutes />
+                    <BottomNav />
+                </BrowserRouter>
+            </TooltipProvider>
+        </QueryClientProvider>
+    </ThemeProvider>
 );
 
 export default App;

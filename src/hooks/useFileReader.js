@@ -3,7 +3,11 @@ import ePub from 'epubjs';
 import { pdfjs } from 'react-pdf';
 import { detectFormat, generateFileHash } from '../lib/book-utils';
 import { getCoverArt } from '../lib/cover-utils';
-import { cleanMetaString, normalizeAuthor } from '../lib/meta-utils';
+import {
+  cleanMetaString,
+  extractPdfMetaObject,
+  normalizeAuthor,
+} from '../lib/meta-utils';
 
 export function useFileReader() {
   const parseEpubMetadata = async (fileData) => {
@@ -17,10 +21,11 @@ export function useFileReader() {
 
   const parsePdfMetadata = async (fileData) => {
     const pdf = await pdfjs.getDocument({ data: fileData }).promise;
-    const metadata = await pdf.getMetadata();
+    const meta = await pdf.getMetadata();
+    const { title, author } = extractPdfMetaObject(meta);
     return {
-      title: cleanMetaString(metadata.info?.Title || ''),
-      author: normalizeAuthor(cleanMetaString(metadata.info?.Author || '')) || 'Unknown Author',
+      title,
+      author: author || 'Unknown Author',
     };
   };
 

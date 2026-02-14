@@ -186,13 +186,44 @@ function usePdfReader({ book, fileData, scrollDirection, onProgressUpdate, onMet
     const [numPages, setNumPages] = useState(0);
     const [currentPage, setCurrentPage] = useState(book.currentPageNumber || 1);
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+    const [visiblePages, setVisiblePages] = useState(new Set());
     const scrollRef = useRef(null);
     const observerRef = useRef(null);
+    const pageObserverRef = useRef(null);
     const initialScrollDoneRef = useRef(false);
     const targetPageNumberRef = useRef(null);
     const userHasScrolledRef = useRef(false);
 
     const memoizedFile = useMemo(() => (fileData ? { data: fileData } : null), [fileData]);
+
+    // Calculate which pages should be rendered (visible + buffer)
+    const pagesToRender = useMemo(() => {
+        if (scrollDirection !== 'scrolled' || numPages === 0) {
+            return new Set([currentPage]); // Paginated mode: just current page
+        }
+
+        // Vertical scroll: render visible pages + buffer
+        const pages = new Set();
+        const targetPage = targetPageNumberRef.current || book.currentPageNumber || 1;
+        const BUFFER_PAGES = 3; // Render 3 pages before and after
+
+        // Always include target page area
+        for (let i = Math.max(1, targetPage - BUFFER_PAGES); i <= Math.min(numPages, targetPage + BUFFER_PAGES); i++) {
+            pages.add(i);
+        }
+
+        // Add visible pages
+        visiblePages.forEach(p => pages.add(p));
+
+        // Add buffer around visible pages
+        visiblePages.forEach(vp => {
+            for (let i = Math.max(1, vp - BUFFER_PAGES); i <= Math.min(numPages, vp + BUFFER_PAGES); i++) {
+                pages.add(i);
+            }
+        });
+
+        return pages;
+    }, [scrollDirection, numPages, currentPage, visiblePages, book.currentPageNumber]);
 
     const handlePageChange = useCallback((page) => {
         const newPage = Math.max(1, Math.min(numPages, page));
@@ -309,6 +340,55 @@ function usePdfReader({ book, fileData, scrollDirection, onProgressUpdate, onMet
         };
     }, [scrollDirection, numPages]);
 
+    // Observer to track which pages are visible (for lazy loading)
+    useEffect(() => {
+        if (scrollDirection !== 'scrolled' || !scrollRef.current || numPages === 0) {
+            return;
+        }
+
+        if (pageObserverRef.current) {
+            pageObserverRef.current.disconnect();
+        }
+
+        const container = scrollRef.current;
+        const options = {
+            root: container,
+            rootMargin: '200% 0px', // Large margin to preload pages
+            threshold: 0
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            const newVisiblePages = new Set(visiblePages);
+            let changed = false;
+
+            entries.forEach(entry => {
+                const pageNum = parseInt(entry.target.getAttribute('data-pdf-page'), 10);
+                if (!isNaN(pageNum)) {
+                    if (entry.isIntersecting) {
+                        if (!newVisiblePages.has(pageNum)) {
+                            newVisiblePages.add(pageNum);
+                            changed = true;
+                        }
+                    }
+                }
+            });
+
+            if (changed) {
+                setVisiblePages(newVisiblePages);
+            }
+        }, options);
+
+        pageObserverRef.current = observer;
+
+        // Observe all page containers
+        const pageElements = Array.from(container.querySelectorAll('[data-pdf-page]'));
+        pageElements.forEach(el => observer.observe(el));
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [scrollDirection, numPages, visiblePages]);
+
     // Observer for tracking visible page during scrolling
     useEffect(() => {
         if (scrollDirection !== 'scrolled' || !scrollRef.current) return;
@@ -352,7 +432,8 @@ function usePdfReader({ book, fileData, scrollDirection, onProgressUpdate, onMet
         memoizedFile,
         handlePageChange,
         onDocumentLoadSuccess,
-        onPageRenderSuccess
+        onPageRenderSuccess,
+        pagesToRender
     };
 }
 
@@ -529,22 +610,40 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                                 onPageRenderSuccess={pdf.onPageRenderSuccess}
                             >
                                 <div className="flex flex-col items-center gap-0" style={{ width: '100%' }}>
-                                    {Array.from(new Array(pdf.numPages), (_, index) => (
-                                        <div
-                                            key={`page_${index + 1}`}
-                                            data-pdf-page={index + 1}
-                                            className="w-full"
-                                            style={{
-                                                display: 'block',
-                                                width: pdf.dimensions.width || '100%',
+                                    {Array.from(new Array(pdf.numPages), (_, index) => {
+                                        const pageNum = index + 1;
+                                        const shouldRender = pdf.pagesToRender.has(pageNum);
 
-                                                // subtle bottom border to separate pages
-                                                borderBottom: '1px solid rgba(0,0,0,0.08)'
-                                            }}
-                                        >
-                                            <Page pageNumber={index + 1} width={pdf.dimensions.width || undefined} height={pdf.dimensions.height || undefined} />
-                                        </div>
-                                    ))}
+                                        return (
+                                            <div
+                                                key={`page_${pageNum}`}
+                                                data-pdf-page={pageNum}
+                                                className="w-full"
+                                                style={{
+                                                    display: 'block',
+                                                    width: pdf.dimensions.width || '100%',
+                                                    minHeight: shouldRender ? 'auto' : `${pdf.dimensions.height || 800}px`,
+                                                    borderBottom: '1px solid rgba(0,0,0,0.08)'
+                                                }}
+                                            >
+                                                {shouldRender ? (
+                                                    <Page
+                                                        pageNumber={pageNum}
+                                                        width={pdf.dimensions.width || undefined}
+                                                        height={pdf.dimensions.height || undefined}
+                                                    />
+                                                ) : (
+                                                    <div
+                                                        className="flex items-center justify-center"
+                                                        style={{
+                                                            height: `${pdf.dimensions.height || 800}px`,
+                                                            background: 'rgba(0,0,0,0.02)'
+                                                        }}
+                                                    />
+                                                )}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </Document>
                         </div>
