@@ -51,7 +51,7 @@ const BookCard = ({ book, onClick, onDelete }) => {
           onContextMenu={handleContextMenu}
       >
         <div
-            className={`relative aspect-[2/3] rounded-2xl overflow-hidden shadow-sm group-hover:shadow-md transition-all duration-300 bg-secondary ${isComingSoon ? 'opacity-70 grayscale-[0.5]' : ''}`}
+            className={`relative aspect-2/3 rounded-xs overflow-hidden shadow-sm group-hover:shadow-md transition-all duration-300 bg-secondary ${isComingSoon ? 'opacity-70 grayscale-[0.5]' : ''}`}
             onClick={(e) => {
               if (!showMenu && !isComingSoon) onClick();
             }}
@@ -59,7 +59,7 @@ const BookCard = ({ book, onClick, onDelete }) => {
           {book.coverUrl ? (
               <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover" />
           ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center p-4 bg-gradient-to-br from-primary/10 to-transparent">
+              <div className="w-full h-full flex flex-col items-center justify-center p-4 bg-linear-to-br from-primary/10 to-transparent">
                 <BookOpen className="w-10 h-10 text-primary/40 mb-3" />
                 <span className="text-xs font-medium text-muted-foreground text-center line-clamp-3 px-2">{book.title}</span>
               </div>
@@ -76,7 +76,7 @@ const BookCard = ({ book, onClick, onDelete }) => {
 
           {/* Progress overlay */}
           {!isComingSoon && book.status === 'reading' && book.progress > 0 && (
-              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-3">
+              <div className="absolute bottom-0 left-0 right-0 bg-linear-to-t from-black/70 to-transparent p-3">
                 <div className="w-full h-1.5 rounded-full bg-white/30 overflow-hidden">
                   <div
                       className="h-full rounded-full transition-all"
@@ -87,10 +87,6 @@ const BookCard = ({ book, onClick, onDelete }) => {
               </div>
           )}
 
-          {/* Format badge */}
-          <Badge className="absolute top-2 right-2 text-[10px] uppercase bg-background/80 text-foreground border-none backdrop-blur-sm">
-            {book.format}
-          </Badge>
 
           {/* Menu button (visible on hover or when menu is shown) */}
           <button
