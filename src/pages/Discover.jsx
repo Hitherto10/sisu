@@ -60,7 +60,7 @@ export default function Discover() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen pb-safe px-6">
+    <div className="flex flex-col h-screen overflow-y-auto pb-safe px-6">
       <header className="pt-8 pb-6 text-left">
         <h1 className="text-3xl font-serif font-bold text-foreground">Discover</h1>
         <p className="text-sm text-muted-foreground mt-1">Explore new worlds and stories</p>

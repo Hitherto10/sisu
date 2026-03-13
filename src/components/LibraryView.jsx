@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { formatDate, formatFileSize, getProgressColor } from '../lib/book-utils';
+import {Images} from "./images/image";
 
 const statusLabels = {
   'reading': 'Reading',
@@ -268,28 +269,25 @@ export default function LibraryView({ books, onSelectBook, onUpload, onDrop, onD
         </header>
 
         {/* Book grid */}
-        <main className="flex-1 px-5">
+        <main className="flex-1 top-10 relative px-5">
           {filtered.length === 0 ? (
               <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   className="flex flex-col items-center justify-center py-20 text-center"
               >
-                <BookMarked className="w-16 h-16 text-muted-foreground/30 mb-4" />
+                {/*<BookMarked className="w-16 h-16 text-muted-foreground/30 mb-4" />*/}
+                <img alt={`base Image`} src={`${Images.book_reading}`} className="w-16 h-16 text-muted-foreground/30 mb-4"/>
+
                 <h2 className="text-lg font-serif font-bold text-muted-foreground">
                   {books.length === 0 ? 'Your library is empty' : 'No books match your search'}
                 </h2>
                 <p className="text-sm text-muted-foreground/70 mt-1 max-w-[250px]">
                   {books.length === 0
-                      ? 'Upload a PDF, EPUB, or TXT file to start reading'
+                      ? 'Upload your favourite books to start reading'
                       : 'Try a different search term or filter'}
                 </p>
-                {books.length === 0 && (
-                    <Button onClick={onUpload} className="mt-4 rounded-full" size="lg">
-                      <Upload className="w-4 h-4 mr-2" />
-                      Add Your First Book
-                    </Button>
-                )}
+
               </motion.div>
           ) : (
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">

@@ -50,7 +50,6 @@ export default function SettingsPage() {
             {/* Header */}
             <header className="pt-8 pb-6 text-left">
                 <div className="flex items-center gap-3 mb-1">
-                    <SettingsIcon className="w-6 h-6 text-primary" />
                     <h1 className="text-3xl font-serif font-bold">Settings</h1>
                 </div>
                 <p className="text-sm text-muted-foreground">
