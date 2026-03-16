@@ -76,7 +76,7 @@ export default function ProgressPage() {
   ].slice(0, 3);
 
   return (
-      <div className="flex flex-col min-h-screen pb-safe bg-background">
+      <div className="flex flex-col h-screen overflow-y-auto pb-safe bg-background">
         <header className="px-6 pt-10 pb-2">
           <h1 className="text-2xl font-serif font-bold text-foreground">Your Progress</h1>
         </header>

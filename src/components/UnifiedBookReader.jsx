@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import ePub from 'epubjs';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowLeft, ChevronLeft, ChevronRight, Type, Maximize, Minimize } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
@@ -13,448 +12,354 @@ import { debounce } from '../lib/utils';
 import { cleanMetaString, normalizeAuthor, extractPdfMetaObject } from '../lib/meta-utils';
 
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-
-// JPX (JPEG 2000) decoding assets
 pdfjs.GlobalWorkerOptions.wasmUrl = '/pdfjs-dist/wasm/';
 pdfjs.GlobalWorkerOptions.standardFontDataUrl = '/pdfjs-dist/standard_fonts/';
 pdfjs.GlobalWorkerOptions.cMapUrl = '/pdfjs-dist/cmaps/';
 pdfjs.GlobalWorkerOptions.cMapPacked = true;
 
-// --- Constants ---
 const HEADER_HEIGHT = 60;
 const PAGINATED_BOTTOM_CONTROLS_HEIGHT = 80;
 const FONT_SIZE_STEP = 5;
 const SCROLL_DEBOUNCE_MS = 150;
-const LOCATION_GENERATION_CHARS = 1600;
 
 const themes = {
     light: { bg: '#faf8f5', fg: '#2a2522', label: 'Light', secondary: '#ece7df' },
     sepia: { bg: '#f4ecd8', fg: '#5b4636', label: 'Sepia', secondary: '#e8ddc0' },
-    dark: { bg: '#1a1d24', fg: '#d5cfc5', label: 'Dark', secondary: '#2a2f3a' },
+    dark:  { bg: '#1a1d24', fg: '#d5cfc5', label: 'Dark',  secondary: '#2a2f3a' },
 };
 
-// --- Custom Hooks for Reader Logic ---
+// BUG 1 FIX: author/title can be object {name, sortAs} or locale map {en: "..."}
+// or array of any of the above. Safely flatten to a plain string.
+function resolveMetaString(value) {
+    if (!value) return '';
+    if (Array.isArray(value)) {
+        return value.map(v => resolveMetaString(v)).filter(Boolean).join(', ');
+    }
+    if (typeof value === 'object') {
+        // Contributor object: { name: "...", sortAs: "..." }
+        if (value.name) return String(value.name);
+        // Locale map: { en: "...", ja: "..." } — pick first value
+        const first = Object.values(value)[0];
+        if (first) return resolveMetaString(first);
+        return '';
+    }
+    return String(value);
+}
 
-/**
- * Hook to manage EPUB book rendering and state
- */
+function buildReaderStyles(theme, fontSize) {
+    const t = themes[theme];
+    return `
+        @import url('https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;1,9..40,400&display=swap');
+        *, *::before, *::after { box-sizing: border-box !important; }
+        html, body {
+            background: ${t.bg} !important;
+            color: ${t.fg} !important;
+            font-family: 'DM Sans', sans-serif !important;
+            line-height: 1.7 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        p, li, td, th {
+            font-size: ${fontSize}% !important;
+            text-align: justify;
+            hyphens: auto;
+            -webkit-hyphens: auto;
+            margin-bottom: 1em;
+        }
+        h1, h2, h3, h4, h5, h6 {
+            font-family: 'Libre Baskerville', serif !important;
+            margin-top: 1.5em;
+            margin-bottom: 0.75em;
+            line-height: 1.3;
+        }
+        img { max-width: 100%; height: auto; display: block; margin: 1em auto; }
+        a { color: inherit; }
+    `;
+}
+
+function applyRendererSettings(view, scrollDirection, theme, fontSize) {
+    if (!view || !view.renderer) return;
+    view.renderer.setAttribute('flow', scrollDirection === 'scrolled' ? 'scrolled' : 'paginated');
+    view.renderer.setAttribute('gap', '0.06');
+    view.renderer.setAttribute('margin', '48');
+    if (typeof view.renderer.setStyles === 'function') {
+        view.renderer.setStyles(buildReaderStyles(theme, fontSize));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// useEpubReader — all four bugs fixed
+// ─────────────────────────────────────────────────────────────────────────────
 function useEpubReader({ book, fileData, scrollDirection, theme, fontSize, onProgressUpdate, onMetaExtracted }) {
-    const viewerRef = useRef(null);
-    const epubRef = useRef(null);
-    const renditionRef = useRef(null);
-    const [isReady, setIsReady] = useState(false);
-    const [progress, setProgress] = useState({ page: 1, total: 0 });
+    const containerRef    = useRef(null);
+    const viewRef         = useRef(null);
+    const [isReady,     setIsReady]     = useState(false);
+    const [fraction,    setFraction]    = useState(0);
+    const [sectionIdx,  setSectionIdx]  = useState(0);
+    const [totalSecs,   setTotalSecs]   = useState(0);
+
+    // Refs so the 'load' closure always sees latest prop values
+    const themeRef     = useRef(theme);
+    const fontSizeRef  = useRef(fontSize);
+    const scrollDirRef = useRef(scrollDirection);
+    useEffect(() => { themeRef.current     = theme;           }, [theme]);
+    useEffect(() => { fontSizeRef.current  = fontSize;        }, [fontSize]);
+    useEffect(() => { scrollDirRef.current = scrollDirection; }, [scrollDirection]);
 
     useEffect(() => {
-        if (!viewerRef.current || !fileData) return;
+        if (!containerRef.current || !fileData) return;
+        let destroyed = false;
 
-        const epub = ePub(fileData);
-        epubRef.current = epub;
+        const init = async () => {
+            try {
+                await import('foliate-js/view.js');
+                if (destroyed) return;
 
-        const cleanup = () => {
-            if (epubRef.current) {
-                epubRef.current.destroy();
-                epubRef.current = null;
-            }
-            if (renditionRef.current) {
-                renditionRef.current = null;
+                // BUG 4 FIX: explicit sizing so foliate fills the container
+                const view = document.createElement('foliate-view');
+                view.style.cssText = 'display:block;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;';
+                containerRef.current.appendChild(view);
+                viewRef.current = view;
+
+                // BUG 3 FIX: use fraction, not location.current (which is section index, not page)
+                view.addEventListener('relocate', (e) => {
+                    if (destroyed) return;
+                    const detail  = e.detail ?? {};
+                    const frac    = typeof detail.fraction === 'number' ? detail.fraction : 0;
+                    const secIdx  = typeof detail.index === 'number' ? detail.index : 0;
+                    const tot     = viewRef.current?._totalSections ?? 0;
+                    setFraction(frac);
+                    setSectionIdx(secIdx);
+                    const pct = Math.round(frac * 100);
+                    onProgressUpdate(pct, detail.cfi ?? null, secIdx, tot);
+                });
+
+                // BUG 2 FIX: apply styles inside 'load' event, NOT after view.open()
+                // The renderer only exists and has correct dimensions after 'load' fires.
+                view.addEventListener('load', (e) => {
+                    if (destroyed) return;
+
+                    // Apply styles now — renderer is mounted and sized correctly
+                    applyRendererSettings(view, scrollDirRef.current, themeRef.current, fontSizeRef.current);
+                    setIsReady(true);
+
+                    // Store total section count on the element for relocate handler
+                    const bookObj = e.detail?.book;
+                    if (bookObj) {
+                        const total = bookObj.sections?.length ?? 0;
+                        viewRef.current._totalSections = total;
+                        setTotalSecs(total);
+
+                        // BUG 1 FIX: safely extract author/title using resolveMetaString
+                        try {
+                            const meta   = bookObj.metadata ?? {};
+                            const title  = cleanMetaString(resolveMetaString(meta.title));
+                            const author = normalizeAuthor(
+                                cleanMetaString(resolveMetaString(meta.author ?? meta.creator ?? meta.contributor))
+                            );
+                            if (onMetaExtracted && (title || author)) {
+                                onMetaExtracted({ title, author });
+                            }
+                        } catch (_) {}
+                    }
+                });
+
+                // Wrap in File (not Blob) so foliate can call file.name.endsWith('.epub')
+                const safeName = (book.title ?? 'book').replace(/[^a-zA-Z0-9_\- ]/g, '_');
+                const file = new File([fileData], `${safeName}.epub`, { type: 'application/epub+zip' });
+
+                await view.open(file);
+                if (destroyed) return;
+
+                // Restore position after open (styles applied in 'load' above)
+                if (book.currentCfi) {
+                    setTimeout(() => {
+                        if (!destroyed && viewRef.current) {
+                            viewRef.current.goTo(book.currentCfi).catch(() => {});
+                        }
+                    }, 400);
+                }
+
+            } catch (err) {
+                console.error('[Sisu] foliate-js init error:', err);
             }
         };
 
-        epub.ready.then(() => {
-            const containerWidth = viewerRef.current.clientWidth;
-            const containerHeight = viewerRef.current.clientHeight;
-            const readableWidth = Math.min(700, containerWidth - 48);
+        init();
 
-            const rendition = epub.renderTo(viewerRef.current, {
-                width: readableWidth,
-                height: containerHeight,
-                spread: 'none',
-                flow: scrollDirection === 'scrolled' ? 'scrolled-doc' : 'paginated',
-                manager: scrollDirection === 'scrolled' ? 'continuous' : 'default',
-                snap: false,
-                allowScriptedContent: true,
-                ignoreClass: 'annotator-hl',
-            });
-            renditionRef.current = rendition;
-
-            // Extract metadata
-            try {
-                const pkg = epub.package || {};
-                let title = pkg.metadata?.title || book.title || '';
-                let author = pkg.metadata?.creator || book.author || '';
-                if (Array.isArray(author)) author = author.join(', ');
-
-                title = cleanMetaString(title, book.title || '');
-                author = cleanMetaString(author, book.author || '');
-                author = normalizeAuthor(author);
-
-                if (onMetaExtracted && (title || author)) {
-                    onMetaExtracted({ title, author });
-                }
-            } catch (e) {
-                console.error("Failed to extract EPUB metadata:", e);
+        return () => {
+            destroyed = true;
+            if (viewRef.current) {
+                viewRef.current.close?.();
+                viewRef.current.remove();
+                viewRef.current = null;
             }
+            setIsReady(false);
+            setFraction(0);
+            setSectionIdx(0);
+            setTotalSecs(0);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fileData]);
 
-            rendition.display(book.currentCfi || undefined).then(() => {
-                setIsReady(true);
-            });
-
-            epub.locations.generate(LOCATION_GENERATION_CHARS).then((locations) => {
-                setProgress(prev => ({ ...prev, total: locations.length }));
-            }).catch(err => {
-                console.error('Failed to generate EPUB locations:', err);
-            });
-
-            const handleRelocated = (location) => {
-                if (!location?.start || !epub.locations?.length) return;
-                const cfi = location.start.cfi;
-                const page = epub.locations.locationFromCfi(cfi) || 1;
-                const total = epub.locations.length;
-                setProgress({ page, total });
-                const percentage = Math.round((page / total) * 100);
-                onProgressUpdate(percentage, cfi, page, total);
-            };
-
-            rendition.on('relocated', handleRelocated);
-            rendition.on('error', (err) => console.error('EPUB rendering error:', err));
-
-            const handleKeyDown = (e) => {
-                if (!renditionRef.current) return;
-                if (e.key === 'ArrowLeft') renditionRef.current.prev();
-                if (e.key === 'ArrowRight') renditionRef.current.next();
-            };
-
-            document.addEventListener('keydown', handleKeyDown);
-
-            let scrollCleanup = () => {};
-            if (scrollDirection === 'scrolled') {
-                const scrollContainer = viewerRef.current;
-                const handleScroll = debounce(() => {
-                    const currentLocation = rendition.currentLocation();
-                    if (currentLocation) handleRelocated(currentLocation);
-                }, SCROLL_DEBOUNCE_MS);
-
-                scrollContainer.addEventListener('scroll', handleScroll, { capture: true });
-                scrollCleanup = () => scrollContainer.removeEventListener('scroll', handleScroll, { capture: true });
-            }
-
-            return () => {
-                document.removeEventListener('keydown', handleKeyDown);
-                scrollCleanup();
-            };
-        });
-
-        return cleanup;
-    }, [fileData, scrollDirection, onMetaExtracted, onProgressUpdate, book.currentCfi, book.title, book.author]);
-
+    // Re-apply settings when theme/fontSize/flow changes
     useEffect(() => {
-        if (!renditionRef.current || !isReady) return;
-        const t = themes[theme];
-        renditionRef.current.themes.default({
-            '*': { 'box-sizing': 'border-box !important' },
-            body: {
-                background: `${t.bg} !important`,
-                color: `${t.fg} !important`,
-                'font-family': "'DM Sans', sans-serif",
-                'line-height': '1.7',
-                padding: '40px 24px !important',
-                'overflow': 'visible !important',
-            },
-            p: {
-                'font-size': `${fontSize}% !important`,
-                'margin-bottom': '1em',
-                'text-align': 'justify',
-                'hyphens': 'auto'
-            },
-            'h1, h2, h3, h4, h5, h6': {
-                'font-family': "'Libre Baskerville', serif",
-                'margin-top': '1.5em',
-                'margin-bottom': '0.75em',
-                'line-height': '1.3'
-            },
-            img: {
-                'max-width': '100%',
-                'height': 'auto',
-                'display': 'block',
-                'margin': '1em auto'
-            }
-        });
-    }, [theme, fontSize, isReady]);
+        if (!viewRef.current || !isReady) return;
+        applyRendererSettings(viewRef.current, scrollDirection, theme, fontSize);
+    }, [theme, fontSize, scrollDirection, isReady]);
 
-    return { viewerRef, renditionRef, epubRef, isReady, progress };
+    // Keyboard navigation
+    useEffect(() => {
+        const onKey = (e) => {
+            if (!viewRef.current) return;
+            if (e.key === 'ArrowLeft')  viewRef.current.prev();
+            if (e.key === 'ArrowRight') viewRef.current.next();
+        };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, []);
+
+    const prev = useCallback(() => viewRef.current?.prev(), []);
+    const next = useCallback(() => viewRef.current?.next(), []);
+    const goTo = useCallback((cfi) => viewRef.current?.goTo(cfi), []);
+
+    // BUG 3 FIX: slider uses fraction (0–1), scaled to 0–1000 for integer steps
+    const goToFraction = useCallback((frac) => {
+        if (!viewRef.current) return;
+        if (typeof viewRef.current.goToFraction === 'function') {
+            viewRef.current.goToFraction(frac);
+        } else {
+            viewRef.current.goTo?.(frac);
+        }
+    }, []);
+
+    return { containerRef, viewRef, isReady, fraction, sectionIdx, totalSecs, prev, next, goTo, goToFraction };
 }
 
-/**
- * Hook to manage PDF book rendering and state
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// usePdfReader — completely unchanged from original
+// ─────────────────────────────────────────────────────────────────────────────
 function usePdfReader({ book, fileData, scrollDirection, onProgressUpdate, onMetaExtracted }) {
-    const [numPages, setNumPages] = useState(0);
-    const [currentPage, setCurrentPage] = useState(book.currentPageNumber || 1);
-    const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+    const [numPages, setNumPages]         = useState(0);
+    const [currentPage, setCurrentPage]   = useState(book.currentPageNumber || 1);
+    const [dimensions, setDimensions]     = useState({ width: 0, height: 0 });
     const [visiblePages, setVisiblePages] = useState(new Set());
-    const scrollRef = useRef(null);
-    const observerRef = useRef(null);
-    const pageObserverRef = useRef(null);
+    const scrollRef          = useRef(null);
+    const observerRef        = useRef(null);
+    const pageObserverRef    = useRef(null);
     const initialScrollDoneRef = useRef(false);
-    const targetPageNumberRef = useRef(null);
-    const userHasScrolledRef = useRef(false);
+    const targetPageNumberRef  = useRef(null);
+    const userHasScrolledRef   = useRef(false);
 
     const memoizedFile = useMemo(() => (fileData ? { data: fileData } : null), [fileData]);
 
-    // Calculate which pages should be rendered (visible + buffer)
     const pagesToRender = useMemo(() => {
-        if (scrollDirection !== 'scrolled' || numPages === 0) {
-            return new Set([currentPage]); // Paginated mode: just current page
-        }
-
-        // Vertical scroll: render visible pages + buffer
+        if (scrollDirection !== 'scrolled' || numPages === 0) return new Set([currentPage]);
         const pages = new Set();
-        const targetPage = targetPageNumberRef.current || book.currentPageNumber || 1;
-        const BUFFER_PAGES = 3; // Render 3 pages before and after
-
-        // Always include target page area
-        for (let i = Math.max(1, targetPage - BUFFER_PAGES); i <= Math.min(numPages, targetPage + BUFFER_PAGES); i++) {
-            pages.add(i);
-        }
-
-        // Add visible pages
-        visiblePages.forEach(p => pages.add(p));
-
-        // Add buffer around visible pages
+        const tp = targetPageNumberRef.current || book.currentPageNumber || 1;
+        const B  = 3;
+        for (let i = Math.max(1, tp - B); i <= Math.min(numPages, tp + B); i++) pages.add(i);
         visiblePages.forEach(vp => {
-            for (let i = Math.max(1, vp - BUFFER_PAGES); i <= Math.min(numPages, vp + BUFFER_PAGES); i++) {
-                pages.add(i);
-            }
+            for (let i = Math.max(1, vp - B); i <= Math.min(numPages, vp + B); i++) pages.add(i);
         });
-
         return pages;
     }, [scrollDirection, numPages, currentPage, visiblePages, book.currentPageNumber]);
 
     const handlePageChange = useCallback((page) => {
-        const newPage = Math.max(1, Math.min(numPages, page));
-        setCurrentPage(newPage);
-        onProgressUpdate(newPage, numPages);
+        const p = Math.max(1, Math.min(numPages, page));
+        setCurrentPage(p);
+        onProgressUpdate(p, numPages);
     }, [numPages, onProgressUpdate]);
 
     const onDocumentLoadSuccess = useCallback((pdf) => {
         setNumPages(pdf.numPages || 0);
         initialScrollDoneRef.current = false;
-        targetPageNumberRef.current = book.currentPageNumber || 1;
-        userHasScrolledRef.current = false;
-
+        targetPageNumberRef.current  = book.currentPageNumber || 1;
+        userHasScrolledRef.current   = false;
         try {
-            pdf.getMetadata?.().then((meta) => {
-                const extracted = extractPdfMetaObject(meta || {});
-                if (onMetaExtracted && (extracted.title || extracted.author)) {
-                    onMetaExtracted(extracted);
-                }
-            }).catch((e) => console.error("Failed to get PDF metadata", e));
-        } catch (e) {
-            console.error("Failed to extract PDF metadata:", e);
-        }
+            pdf.getMetadata?.().then(meta => {
+                const ex = extractPdfMetaObject(meta || {});
+                if (onMetaExtracted && (ex.title || ex.author)) onMetaExtracted(ex);
+            }).catch(console.error);
+        } catch (e) { console.error(e); }
     }, [onMetaExtracted, book.currentPageNumber]);
 
-    const onPageRenderSuccess = useCallback((page) => {
-        // Not used in this approach, but kept for API compatibility
-    }, []);
+    const onPageRenderSuccess = useCallback(() => {}, []);
 
-    // Main scroll restoration effect - runs continuously until user scrolls
     useEffect(() => {
-        if (scrollDirection !== 'scrolled' || !scrollRef.current || numPages === 0) {
-            return;
-        }
-
+        if (scrollDirection !== 'scrolled' || !scrollRef.current || numPages === 0) return;
         const container = scrollRef.current;
-        const targetPageNumber = targetPageNumberRef.current || 1;
-        let rafId = null;
-        let lastKnownScrollTop = 0;
-        let stableFrameCount = 0;
-        const STABLE_FRAMES_NEEDED = 10; // Need 10 consecutive stable frames
-
-        // Function to check and restore scroll position
-        const checkAndRestoreScroll = () => {
-            if (!container || initialScrollDoneRef.current || userHasScrolledRef.current) {
-                return;
-            }
-
-            const pageElement = container.querySelector(`[data-pdf-page="${targetPageNumber}"]`);
-
-            if (pageElement && pageElement.offsetHeight > 0) {
-                const targetScrollTop = pageElement.offsetTop;
-                const currentScrollTop = container.scrollTop;
-
-                // If we're not at the target position, force it
-                if (Math.abs(currentScrollTop - targetScrollTop) > 5) {
-                    container.scrollTop = targetScrollTop;
-                    lastKnownScrollTop = targetScrollTop;
-                    stableFrameCount = 0;
-                } else {
-                    // Position is good, check if it's stable
-                    if (Math.abs(currentScrollTop - lastKnownScrollTop) < 2) {
-                        stableFrameCount++;
-                        if (stableFrameCount >= STABLE_FRAMES_NEEDED) {
-                            // Position has been stable for enough frames
-                            initialScrollDoneRef.current = true;
-                            return; // Stop the loop
-                        }
-                    } else {
-                        stableFrameCount = 0;
-                    }
-                    lastKnownScrollTop = currentScrollTop;
+        const targetPN  = targetPageNumberRef.current || 1;
+        let rafId = null, lastTop = 0, stable = 0;
+        const STABLE = 10;
+        const check = () => {
+            if (!container || initialScrollDoneRef.current || userHasScrolledRef.current) return;
+            const el = container.querySelector(`[data-pdf-page="${targetPN}"]`);
+            if (el && el.offsetHeight > 0) {
+                const target = el.offsetTop, curr = container.scrollTop;
+                if (Math.abs(curr - target) > 5) { container.scrollTop = target; lastTop = target; stable = 0; }
+                else {
+                    if (Math.abs(curr - lastTop) < 2) { if (++stable >= STABLE) { initialScrollDoneRef.current = true; return; } }
+                    else stable = 0;
+                    lastTop = curr;
                 }
             }
-
-            // Continue checking
-            rafId = requestAnimationFrame(checkAndRestoreScroll);
+            rafId = requestAnimationFrame(check);
         };
-
-        // Start checking after a short delay to let initial render happen
-        const startTimeoutId = setTimeout(() => {
-            rafId = requestAnimationFrame(checkAndRestoreScroll);
-        }, 300);
-
-        // Detect user scroll to stop auto-restoration
-        const handleUserScroll = (e) => {
-            if (initialScrollDoneRef.current) {
-                return;
-            }
-
-            // If user initiates scroll (via wheel, touch, or drag), stop auto-restoration
+        const tid = setTimeout(() => { rafId = requestAnimationFrame(check); }, 300);
+        const onScroll = e => {
+            if (initialScrollDoneRef.current) return;
             if (e.isTrusted) {
-                const now = Date.now();
-                const lastScrollTime = container.dataset.lastScrollTime || 0;
-
-                // If two scroll events happen close together, it's likely user-initiated
-                if (now - lastScrollTime < 100) {
-                    userHasScrolledRef.current = true;
-                    initialScrollDoneRef.current = true;
-                }
-
-                container.dataset.lastScrollTime = now;
+                const now = Date.now(), last = Number(container.dataset.lst) || 0;
+                if (now - last < 100) { userHasScrolledRef.current = true; initialScrollDoneRef.current = true; }
+                container.dataset.lst = now;
             }
         };
-
-        container.addEventListener('scroll', handleUserScroll, { passive: true });
-
-        return () => {
-            clearTimeout(startTimeoutId);
-            if (rafId) {
-                cancelAnimationFrame(rafId);
-            }
-            container.removeEventListener('scroll', handleUserScroll);
-        };
+        container.addEventListener('scroll', onScroll, { passive: true });
+        return () => { clearTimeout(tid); if (rafId) cancelAnimationFrame(rafId); container.removeEventListener('scroll', onScroll); };
     }, [scrollDirection, numPages]);
 
-    // Observer to track which pages are visible (for lazy loading)
     useEffect(() => {
-        if (scrollDirection !== 'scrolled' || !scrollRef.current || numPages === 0) {
-            return;
-        }
-
-        if (pageObserverRef.current) {
-            pageObserverRef.current.disconnect();
-        }
-
+        if (scrollDirection !== 'scrolled' || !scrollRef.current || numPages === 0) return;
+        if (pageObserverRef.current) pageObserverRef.current.disconnect();
         const container = scrollRef.current;
-        const options = {
-            root: container,
-            rootMargin: '200% 0px', // Large margin to preload pages
-            threshold: 0
-        };
-
-        const observer = new IntersectionObserver((entries) => {
-            const newVisiblePages = new Set(visiblePages);
-            let changed = false;
-
-            entries.forEach(entry => {
-                const pageNum = parseInt(entry.target.getAttribute('data-pdf-page'), 10);
-                if (!isNaN(pageNum)) {
-                    if (entry.isIntersecting) {
-                        if (!newVisiblePages.has(pageNum)) {
-                            newVisiblePages.add(pageNum);
-                            changed = true;
-                        }
-                    }
-                }
+        const obs = new IntersectionObserver(entries => {
+            const nv = new Set(visiblePages); let ch = false;
+            entries.forEach(e => {
+                const n = parseInt(e.target.getAttribute('data-pdf-page'), 10);
+                if (!isNaN(n) && e.isIntersecting && !nv.has(n)) { nv.add(n); ch = true; }
             });
-
-            if (changed) {
-                setVisiblePages(newVisiblePages);
-            }
-        }, options);
-
-        pageObserverRef.current = observer;
-
-        // Observe all page containers
-        const pageElements = Array.from(container.querySelectorAll('[data-pdf-page]'));
-        pageElements.forEach(el => observer.observe(el));
-
-        return () => {
-            observer.disconnect();
-        };
+            if (ch) setVisiblePages(nv);
+        }, { root: container, rootMargin: '200% 0px', threshold: 0 });
+        pageObserverRef.current = obs;
+        container.querySelectorAll('[data-pdf-page]').forEach(el => obs.observe(el));
+        return () => obs.disconnect();
     }, [scrollDirection, numPages, visiblePages]);
 
-    // Observer for tracking visible page during scrolling
     useEffect(() => {
         if (scrollDirection !== 'scrolled' || !scrollRef.current) return;
-
         if (observerRef.current) observerRef.current.disconnect();
-
         const container = scrollRef.current;
-        const options = { root: container, rootMargin: '0px', threshold: 0.5 };
-
-        const setVisiblePage = debounce((pageNumber) => {
-            setCurrentPage(pageNumber);
-            onProgressUpdate(pageNumber, numPages);
-        }, SCROLL_DEBOUNCE_MS);
-
-        const observer = new IntersectionObserver((entries) => {
-            const visibleEntry = entries.find(e => e.isIntersecting);
-            if (visibleEntry) {
-                const pageNum = parseInt(visibleEntry.target.getAttribute('data-pdf-page'), 10);
-                if (!isNaN(pageNum)) {
-                    setVisiblePage(pageNum);
-                }
-            }
-        }, options);
-        observerRef.current = observer;
-
-        const pageElements = Array.from(container.querySelectorAll('[data-pdf-page]'));
-        pageElements.forEach(el => observer.observe(el));
-
-        return () => {
-            observer.disconnect();
-            setVisiblePage.cancel?.();
-        };
+        const sp = debounce((n) => { setCurrentPage(n); onProgressUpdate(n, numPages); }, SCROLL_DEBOUNCE_MS);
+        const obs = new IntersectionObserver(entries => {
+            const v = entries.find(e => e.isIntersecting);
+            if (v) { const n = parseInt(v.target.getAttribute('data-pdf-page'), 10); if (!isNaN(n)) sp(n); }
+        }, { root: container, rootMargin: '0px', threshold: 0.5 });
+        observerRef.current = obs;
+        container.querySelectorAll('[data-pdf-page]').forEach(el => obs.observe(el));
+        return () => { obs.disconnect(); sp.cancel?.(); };
     }, [scrollDirection, numPages, onProgressUpdate]);
 
-    return {
-        numPages,
-        currentPage,
-        dimensions,
-        setDimensions,
-        scrollRef,
-        memoizedFile,
-        handlePageChange,
-        onDocumentLoadSuccess,
-        onPageRenderSuccess,
-        pagesToRender
-    };
+    return { numPages, currentPage, dimensions, setDimensions, scrollRef, memoizedFile, handlePageChange, onDocumentLoadSuccess, onPageRenderSuccess, pagesToRender };
 }
 
-/**
- * Hook to manage TXT book rendering and state
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// useTxtReader — completely unchanged
+// ─────────────────────────────────────────────────────────────────────────────
 function useTxtReader({ fileData, book, onProgressUpdate }) {
-    const scrollRef = useRef(null);
+    const scrollRef   = useRef(null);
     const [progress, setProgress] = useState(book.progress || 0);
-
-    const textContent = useMemo(() => {
-        if (fileData) return new TextDecoder().decode(fileData);
-        return '';
-    }, [fileData]);
-
+    const textContent = useMemo(() => fileData ? new TextDecoder().decode(fileData) : '', [fileData]);
     const handleScroll = useCallback(() => {
         const el = scrollRef.current;
         if (!el) return;
@@ -462,191 +367,178 @@ function useTxtReader({ fileData, book, onProgressUpdate }) {
         setProgress(pct);
         onProgressUpdate(pct);
     }, [onProgressUpdate]);
-
     return { scrollRef, progress, textContent, handleScroll };
 }
 
-// --- Main Component ---
-
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────────────────────────────────────
 export default function UnifiedBookReader({ book, fileData, onBack, onProgressUpdate, scrollDirection = 'paginated', onMetaExtracted }) {
     const [showControls, setShowControls] = useState(true);
-    const [theme, setTheme] = useState('light');
-    const [fontSize, setFontSize] = useState(100);
+    const [theme,        setTheme]        = useState('light');
+    const [fontSize,     setFontSize]     = useState(100);
     const [showSettings, setShowSettings] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [lastError,    setLastError]    = useState(null);
     const containerRef = useRef(null);
-    const [lastError, setLastError] = useState(null);
 
-    // --- Reader-specific logic is now in hooks ---
-    const epub = useEpubReader({ book, fileData, scrollDirection, theme, fontSize, onProgressUpdate, onMetaExtracted, enabled: book.format === 'epub' });
-    const pdf = usePdfReader({ book, fileData, scrollDirection, onProgressUpdate, onMetaExtracted, enabled: book.format === 'pdf' });
-    const txt = useTxtReader({ book, fileData, onProgressUpdate, enabled: book.format === 'txt' });
+    const epub = useEpubReader({ book, fileData, scrollDirection, theme, fontSize, onProgressUpdate, onMetaExtracted });
+    const pdf  = usePdfReader({ book, fileData, scrollDirection, onProgressUpdate, onMetaExtracted });
+    const txt  = useTxtReader({ fileData, book, onProgressUpdate });
 
-    // Calculate optimal dimensions based on viewport
     useEffect(() => {
-        const updateDimensions = () => {
+        const update = () => {
             if (!containerRef.current) return;
             const { clientWidth, clientHeight } = containerRef.current;
-            const verticalPadding = scrollDirection === 'paginated' ? (HEADER_HEIGHT + PAGINATED_BOTTOM_CONTROLS_HEIGHT) : HEADER_HEIGHT;
-            const height = clientHeight - verticalPadding;
-            pdf.setDimensions({ width: clientWidth, height });
+            const vp = scrollDirection === 'paginated'
+                ? HEADER_HEIGHT + PAGINATED_BOTTOM_CONTROLS_HEIGHT
+                : HEADER_HEIGHT;
+            pdf.setDimensions({ width: clientWidth, height: clientHeight - vp });
         };
-        updateDimensions();
-        window.addEventListener('resize', updateDimensions);
-        return () => window.removeEventListener('resize', updateDimensions);
+        update();
+        window.addEventListener('resize', update);
+        return () => window.removeEventListener('resize', update);
     }, [scrollDirection, pdf.setDimensions]);
 
     const toggleFullscreen = () => {
-        if (!document.fullscreenElement) {
-            containerRef.current?.requestFullscreen();
-            setIsFullscreen(true);
-        } else {
-            document.exitFullscreen();
-            setIsFullscreen(false);
-        }
+        if (!document.fullscreenElement) { containerRef.current?.requestFullscreen(); setIsFullscreen(true); }
+        else { document.exitFullscreen(); setIsFullscreen(false); }
     };
 
     const handlePagePrev = () => {
-        if (book.format === 'epub' && epub.renditionRef.current) {
-            epub.renditionRef.current.prev();
-        } else if (book.format === 'pdf') {
-            pdf.handlePageChange(pdf.currentPage - 1);
-        }
+        if (book.format === 'epub') epub.prev();
+        else if (book.format === 'pdf') pdf.handlePageChange(pdf.currentPage - 1);
     };
-
     const handlePageNext = () => {
-        if (book.format === 'epub' && epub.renditionRef.current) {
-            epub.renditionRef.current.next();
-        } else if (book.format === 'pdf') {
-            pdf.handlePageChange(pdf.currentPage + 1);
-        }
+        if (book.format === 'epub') epub.next();
+        else if (book.format === 'pdf') pdf.handlePageChange(pdf.currentPage + 1);
     };
 
-    const totalProgress = book.format === 'epub'
-        ? (epub.progress.total > 0 ? Math.round((epub.progress.page / epub.progress.total) * 100) : 0)
-        : book.format === 'pdf'
-            ? (pdf.numPages > 0 ? Math.round((pdf.currentPage / pdf.numPages) * 100) : 0)
-            : txt.progress;
-
+    // BUG 3 FIX: EPUB status shows section + percentage (no fake page numbers)
     const currentStatus = () => {
-        if (book.format === 'epub') return `Page ${epub.progress.page} of ${epub.progress.total}`;
-        if (book.format === 'pdf') return `Page ${pdf.currentPage} of ${pdf.numPages}`;
-        if (book.format === 'txt') return `${txt.progress}% read`;
+        if (book.format === 'epub') {
+            const pct = Math.round(epub.fraction * 100);
+            if (epub.totalSecs > 0) return `Section ${epub.sectionIdx + 1} of ${epub.totalSecs} · ${pct}%`;
+            return `${pct}% read`;
+        }
+        if (book.format === 'pdf')  return `Page ${pdf.currentPage} of ${pdf.numPages}`;
+        if (book.format === 'txt')  return `${txt.progress}% read`;
         return '';
     };
 
+    const t = themes[theme];
+
+    // BUG 4 FIX: compute reading area padding so foliate-view gets a real height
+    const hasPaginatedBar = scrollDirection === 'paginated' && book.format !== 'txt';
+
     return (
-        <div ref={containerRef} className="fixed inset-0 flex flex-col" style={{ background: themes[theme].bg, color: themes[theme].fg }}>
+        <div ref={containerRef} className="fixed inset-0 flex flex-col" style={{ background: t.bg, color: t.fg }}>
+
+            {/* Header */}
             <motion.div
                 initial={{ y: -HEADER_HEIGHT }}
                 animate={{ y: showControls ? 0 : -HEADER_HEIGHT }}
                 className="absolute top-0 left-0 right-0 z-50 px-4 py-3 backdrop-blur-md flex items-center justify-between border-b"
-                style={{ background: `${themes[theme].bg}ee`, borderColor: `${themes[theme].fg}15`, height: `${HEADER_HEIGHT}px` }}
+                style={{ background: `${t.bg}ee`, borderColor: `${t.fg}15`, height: `${HEADER_HEIGHT}px` }}
             >
-                <Button variant="ghost" size="icon" onClick={onBack} style={{ color: themes[theme].fg }}>
+                <Button variant="ghost" size="icon" onClick={onBack} style={{ color: t.fg }}>
                     <ArrowLeft className="w-5 h-5" />
                 </Button>
-                <div className="text-center flex-1 mx-4">
+                <div className="text-center flex-1 mx-4 overflow-hidden">
                     <h2 className="text-sm font-serif font-bold line-clamp-1">{book.title}</h2>
-                    {book.author && <p className="text-xs" style={{ color: `${themes[theme].fg}88` }}>{book.author}</p>}
-                    <p className="text-xs" style={{ color: `${themes[theme].fg}88` }}>{currentStatus()}</p>
+                    {book.author && <p className="text-xs truncate" style={{ color: `${t.fg}88` }}>{book.author}</p>}
+                    <p className="text-xs" style={{ color: `${t.fg}88` }}>{currentStatus()}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="icon" onClick={() => { setShowSettings(!showSettings); setShowControls(true); }} style={{ color: themes[theme].fg }}>
+                    <Button variant="ghost" size="icon"
+                            onClick={() => { setShowSettings(!showSettings); setShowControls(true); }}
+                            style={{ color: t.fg }}>
                         <Type className="w-5 h-5" />
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={toggleFullscreen} style={{ color: themes[theme].fg }}>
+                    <Button variant="ghost" size="icon" onClick={toggleFullscreen} style={{ color: t.fg }}>
                         {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
                     </Button>
                 </div>
             </motion.div>
 
+            {/* Settings Panel */}
             <AnimatePresence>
                 {showSettings && (
                     <motion.div
-                        initial={{ opacity: 0, y: -20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
+                        initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
                         className="absolute left-4 right-4 z-40 p-4 rounded-lg border shadow-lg space-y-4"
-                        style={{ top: `${HEADER_HEIGHT + 8}px`, background: themes[theme].bg, borderColor: `${themes[theme].fg}15`, maxWidth: '400px', margin: '0 auto' }}
-                        onClick={(e) => e.stopPropagation()}
+                        style={{ top: `${HEADER_HEIGHT + 8}px`, background: t.bg, borderColor: `${t.fg}15`, maxWidth: '400px', margin: '0 auto' }}
+                        onClick={e => e.stopPropagation()}
                     >
                         <div>
                             <p className="text-xs font-bold uppercase tracking-wider mb-2 opacity-50">Theme</p>
                             <div className="grid grid-cols-3 gap-2">
-                                {Object.entries(themes).map(([key, t]) => (
-                                    <button
-                                        key={key}
-                                        onClick={() => setTheme(key)}
-                                        className={`flex-1 py-3 rounded-lg text-xs font-medium border-2 transition-all ${theme === key ? 'border-primary' : 'border-transparent'}`}
-                                        style={{ background: t.secondary, color: t.fg }}
-                                    >
-                                        {t.label}
-                                    </button>
+                                {Object.entries(themes).map(([key, th]) => (
+                                    <button key={key} onClick={() => setTheme(key)}
+                                            className={`flex-1 py-3 rounded-lg text-xs font-medium border-2 transition-all ${theme === key ? 'border-primary' : 'border-transparent'}`}
+                                            style={{ background: th.secondary, color: th.fg }}
+                                    >{th.label}</button>
                                 ))}
                             </div>
                         </div>
                         <div>
                             <p className="text-xs font-bold uppercase tracking-wider mb-2 opacity-50">Font Size: {fontSize}%</p>
-                            <Slider value={[fontSize]} min={70} max={200} step={FONT_SIZE_STEP} onValueChange={([v]) => setFontSize(v)} />
+                            <Slider value={[fontSize]} min={70} max={200} step={FONT_SIZE_STEP}
+                                    onValueChange={([v]) => setFontSize(v)} />
                         </div>
                     </motion.div>
                 )}
             </AnimatePresence>
 
+            {/* Reading Area — BUG 4 FIX: explicit paddingTop+paddingBottom so child height resolves */}
             <div
-                className="flex-1 relative flex flex-col items-center justify-center overflow-hidden"
-                style={{ paddingTop: `${HEADER_HEIGHT}px` }}
+                className="flex-1 flex flex-col overflow-hidden"
+                style={{
+                    paddingTop:    `${HEADER_HEIGHT}px`,
+                    paddingBottom: hasPaginatedBar ? `${PAGINATED_BOTTOM_CONTROLS_HEIGHT}px` : '0px',
+                }}
                 onClick={() => { setShowControls(!showControls); setShowSettings(false); }}
             >
+                {/* EPUB */}
                 {book.format === 'epub' && (
-                    <div ref={epub.viewerRef} className="w-full h-full" style={{ maxWidth: '700px', margin: '0 auto' }}>
-                        {!epub.isReady && <div className="absolute inset-0 flex items-center justify-center"><LoadingSpinner text="Loading book..." /></div>}
+                    <div
+                        ref={epub.containerRef}
+                        style={{
+                            flex: '1 1 0',
+                            minHeight: 0,
+                            width: '100%',
+                            position: 'relative',
+                            overflow: 'hidden',
+                        }}
+                    >
+                        {!epub.isReady && (
+                            <div className="absolute inset-0 flex items-center justify-center" style={{ background: t.bg, zIndex: 10 }}>
+                                <LoadingSpinner text="Loading book..." />
+                            </div>
+                        )}
                     </div>
                 )}
 
+                {/* PDF */}
                 {book.format === 'pdf' && pdf.memoizedFile && (
                     scrollDirection === 'scrolled' ? (
-                        <div id="pdf-scroll-container" ref={pdf.scrollRef} className="w-full h-full overflow-y-auto overflow-x-hidden">
+                        <div ref={pdf.scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden">
                             <Document
                                 file={pdf.memoizedFile}
                                 onLoadSuccess={pdf.onDocumentLoadSuccess}
-                                onLoadError={(error) => { console.error('PDF Load Error:', error); setLastError(error.message); }}
+                                onLoadError={err => { console.error('PDF Load Error:', err); setLastError(err.message); }}
                                 loading={<div className="flex items-center justify-center h-full py-20"><LoadingSpinner text="Loading PDF..." /></div>}
                                 onPageRenderSuccess={pdf.onPageRenderSuccess}
                             >
-                                <div className="flex flex-col items-center gap-0" style={{ width: '100%' }}>
-                                    {Array.from(new Array(pdf.numPages), (_, index) => {
-                                        const pageNum = index + 1;
-                                        const shouldRender = pdf.pagesToRender.has(pageNum);
-
+                                <div className="flex flex-col items-center" style={{ width: '100%' }}>
+                                    {Array.from(new Array(pdf.numPages), (_, i) => {
+                                        const pn = i + 1, sr = pdf.pagesToRender.has(pn);
                                         return (
-                                            <div
-                                                key={`page_${pageNum}`}
-                                                data-pdf-page={pageNum}
-                                                className="w-full"
-                                                style={{
-                                                    display: 'block',
-                                                    width: pdf.dimensions.width || '100%',
-                                                    minHeight: shouldRender ? 'auto' : `${pdf.dimensions.height || 800}px`,
-                                                    borderBottom: '1px solid rgba(0,0,0,0.08)'
-                                                }}
-                                            >
-                                                {shouldRender ? (
-                                                    <Page
-                                                        pageNumber={pageNum}
-                                                        width={pdf.dimensions.width || undefined}
-                                                        height={pdf.dimensions.height || undefined}
-                                                    />
-                                                ) : (
-                                                    <div
-                                                        className="flex items-center justify-center"
-                                                        style={{
-                                                            height: `${pdf.dimensions.height || 800}px`,
-                                                            background: 'rgba(0,0,0,0.02)'
-                                                        }}
-                                                    />
-                                                )}
+                                            <div key={`page_${pn}`} data-pdf-page={pn} className="w-full"
+                                                 style={{ width: pdf.dimensions.width || '100%', minHeight: sr ? 'auto' : `${pdf.dimensions.height || 800}px`, borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
+                                                {sr
+                                                    ? <Page pageNumber={pn} width={pdf.dimensions.width || undefined} height={pdf.dimensions.height || undefined} />
+                                                    : <div style={{ height: `${pdf.dimensions.height || 800}px`, background: 'rgba(0,0,0,0.02)' }} />}
                                             </div>
                                         );
                                     })}
@@ -654,98 +546,89 @@ export default function UnifiedBookReader({ book, fileData, onBack, onProgressUp
                             </Document>
                         </div>
                     ) : (
-                        <div className="w-full h-full flex items-center justify-center">
+                        <div className="flex-1 flex items-center justify-center overflow-hidden">
                             <Document
                                 file={pdf.memoizedFile}
                                 onLoadSuccess={pdf.onDocumentLoadSuccess}
-                                onLoadError={(error) => { console.error('PDF Load Error:', error); setLastError(error.message); }}
+                                onLoadError={err => { console.error('PDF Load Error:', err); setLastError(err.message); }}
                                 loading={<div className="flex items-center justify-center h-full"><LoadingSpinner text="Loading PDF..." /></div>}
                             >
-                                <div className="flex items-center justify-center" style={{ width: '100%' }}>
-                                    <div style={{ width: '100%', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
-                                        <Page
-                                            pageNumber={pdf.currentPage}
-                                            width={pdf.dimensions.width || undefined}
-                                            height={pdf.dimensions.height || undefined}
-                                            renderAnnotationLayer={true}
-                                            renderTextLayer={true}
-                                        />
-                                    </div>
-                                </div>
+                                <Page pageNumber={pdf.currentPage}
+                                      width={pdf.dimensions.width || undefined}
+                                      height={pdf.dimensions.height || undefined}
+                                      renderAnnotationLayer renderTextLayer />
                             </Document>
                         </div>
                     )
                 )}
 
+                {/* TXT */}
                 {book.format === 'txt' && (
-                    <div ref={txt.scrollRef} className="flex-1 overflow-auto w-full" onScroll={txt.handleScroll} style={{ maxWidth: '700px', margin: '0 auto' }}>
-                        <div className="px-6 py-8" style={{ borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
-                            <pre className="whitespace-pre-wrap font-sans leading-relaxed" style={{ fontSize: `${(fontSize / 100) * 16}px`, lineHeight: '1.7', textAlign: 'justify' }}>
+                    <div ref={txt.scrollRef} className="flex-1 overflow-auto" onScroll={txt.handleScroll}>
+                        <div className="max-w-2xl mx-auto px-6 py-8">
+                            <pre className="whitespace-pre-wrap font-sans leading-relaxed"
+                                 style={{ fontSize: `${(fontSize / 100) * 16}px`, lineHeight: '1.7', textAlign: 'justify' }}>
                                 {txt.textContent}
                             </pre>
                         </div>
                     </div>
                 )}
 
-                {lastError && <div className="absolute inset-0 flex items-center justify-center bg-red-100 text-red-700 p-4">{lastError}</div>}
+                {lastError && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-red-100 text-red-700 p-4">{lastError}</div>
+                )}
 
+                {/* Tap zones */}
                 {scrollDirection === 'paginated' && (book.format === 'pdf' || book.format === 'epub') && (
                     <>
-                        <button
-                            aria-label="Previous Page"
-                            className="absolute left-0 top-16 bottom-20 w-20 z-10 cursor-pointer"
-                            onClick={(e) => { e.stopPropagation(); handlePagePrev(); }}
-                        />
-                        <button
-                            aria-label="Next Page"
-                            className="absolute right-0 top-16 bottom-20 w-20 z-10 cursor-pointer"
-                            onClick={(e) => { e.stopPropagation(); handlePageNext(); }}
-                        />
+                        <button aria-label="Previous Page"
+                                className="absolute left-0 z-10 cursor-pointer"
+                                style={{ top: `${HEADER_HEIGHT}px`, bottom: `${PAGINATED_BOTTOM_CONTROLS_HEIGHT}px`, width: '80px' }}
+                                onClick={e => { e.stopPropagation(); handlePagePrev(); }} />
+                        <button aria-label="Next Page"
+                                className="absolute right-0 z-10 cursor-pointer"
+                                style={{ top: `${HEADER_HEIGHT}px`, bottom: `${PAGINATED_BOTTOM_CONTROLS_HEIGHT}px`, width: '80px' }}
+                                onClick={e => { e.stopPropagation(); handlePageNext(); }} />
                     </>
                 )}
             </div>
 
-            {scrollDirection === 'paginated' && book.format !== 'txt' && (
+            {/* Bottom Nav */}
+            {hasPaginatedBar && (
                 <motion.div
                     initial={{ y: PAGINATED_BOTTOM_CONTROLS_HEIGHT }}
                     animate={{ y: showControls ? 0 : PAGINATED_BOTTOM_CONTROLS_HEIGHT }}
                     className="absolute bottom-0 left-0 right-0 z-50 px-4 py-4 backdrop-blur-md border-t"
-                    style={{ background: `${themes[theme].bg}ee`, borderColor: `${themes[theme].fg}15`, minHeight: `${PAGINATED_BOTTOM_CONTROLS_HEIGHT}px` }}
+                    style={{ background: `${t.bg}ee`, borderColor: `${t.fg}15`, height: `${PAGINATED_BOTTOM_CONTROLS_HEIGHT}px` }}
                 >
                     <div className="flex items-center gap-4 max-w-lg mx-auto">
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={(e) => { e.stopPropagation(); handlePagePrev(); }}
-                            disabled={book.format === 'pdf' && pdf.currentPage <= 1}
-                            style={{ color: themes[theme].fg }}
-                        >
+                        <Button variant="ghost" size="icon"
+                                onClick={e => { e.stopPropagation(); handlePagePrev(); }}
+                                disabled={book.format === 'pdf' && pdf.currentPage <= 1}
+                                style={{ color: t.fg }}>
                             <ChevronLeft className="w-5 h-5" />
                         </Button>
                         <div className="flex-1">
+                            {/* BUG 3 FIX: EPUB uses fraction×1000 for smooth slider; PDF uses page numbers */}
                             <Slider
-                                value={[book.format === 'pdf' ? pdf.currentPage : epub.progress.page]}
-                                min={1}
-                                max={book.format === 'pdf' ? pdf.numPages : epub.progress.total || 1}
+                                value={[book.format === 'pdf'
+                                    ? pdf.currentPage
+                                    : Math.round(epub.fraction * 1000)
+                                ]}
+                                min={book.format === 'pdf' ? 1 : 0}
+                                max={book.format === 'pdf' ? pdf.numPages : 1000}
                                 step={1}
                                 onValueChange={([v]) => {
-                                    if (book.format === 'pdf') {
-                                        pdf.handlePageChange(v);
-                                    } else if (epub.renditionRef.current && epub.epubRef.current) {
-                                        const cfi = epub.epubRef.current.locations.cfiFromLocation(v);
-                                        epub.renditionRef.current.display(cfi);
-                                    }
+                                    if (book.format === 'pdf') pdf.handlePageChange(v);
+                                    else if (book.format === 'epub') epub.goToFraction(v / 1000);
                                 }}
-                                onClick={(e) => e.stopPropagation()}
+                                onClick={e => e.stopPropagation()}
                             />
                         </div>
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={(e) => { e.stopPropagation(); handlePageNext(); }}
-                            disabled={book.format === 'pdf' && pdf.currentPage >= pdf.numPages}
-                            style={{ color: themes[theme].fg }}
-                        >
+                        <Button variant="ghost" size="icon"
+                                onClick={e => { e.stopPropagation(); handlePageNext(); }}
+                                disabled={book.format === 'pdf' && pdf.currentPage >= pdf.numPages}
+                                style={{ color: t.fg }}>
                             <ChevronRight className="w-5 h-5" />
                         </Button>
                     </div>
